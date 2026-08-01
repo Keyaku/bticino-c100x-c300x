@@ -137,6 +137,11 @@ def ask_yn(prompt: str, default: str | bool):
 SSHKeyPair = namedtuple('SSHKeyPair', ['public', 'private'])
 LegrandURLQuery = namedtuple('LegrandURLQuery', ['fileFormat', 'fileName', 'fileId'], defaults=['generic'])
 
+
+class FirmwarePatchError(RuntimeError):
+    """A patch step failed. Never continue: a partially patched image still
+    flashes cleanly and fails only once it is on the device."""
+
 # Base URL: https://www.homesystems-legrandgroup.com/MatrixENG/liferay/bt_mxLiferayCheckout.jsp
 URL_LEGRAND = ParseResult('https', 'www.homesystems-legrandgroup.com', '/MatrixENG/liferay/bt_mxLiferayCheckout.jsp', '', '', '')
 
@@ -213,6 +218,14 @@ class PrepareFirmware():
         """Main function."""
         self.logger.info('Starting PrepareFirmware using version %s', __version__)
 
+        # Loop-mounting the image and writing /etc/{shadow,passwd} inside it both
+        # need root. Check up front rather than after a ~100 MB download.
+        if os.geteuid() != 0:
+            print('This script needs root to loop-mount the firmware image and '
+                  'edit /etc/shadow and /etc/passwd inside it.', flush=True)
+            print(f'Re-run it as: sudo {sys.executable} {os.path.basename(__file__)}', flush=True)
+            sys.exit(1)
+
         # Ask for device model
         self.model = ask('Enter model', ['C100X', 'C300X'], default='C100X', display_as_list=True).lower()
         self.logger.info('State 0 done: using model %s', self.model)
@@ -265,7 +278,7 @@ class PrepareFirmware():
 
         # Process firmware
         dt = time.strftime('%Y%m%d_%H%M%S')
-        self.fileout = f'NEW_{self.model}_{self.version_id}{'_MQTT' if result else ''}_{dt}.fwz'
+        self.fileout = f'NEW_{self.model}_{self.version_id}{'_MQTT' if self.install_mqtt == 'y' else ''}_{dt}.fwz'
         cwd = self.process_firmware()
 
         # Move it inside folder fw/custom
@@ -544,19 +557,20 @@ class PrepareFirmware():
         return result
 
     def append_to_file(self, filename, line1, line2):
-        """Append to filename."""
+        """Append to filename. Fatal on failure: a firmware missing these
+        edits still flashes, but leaves no way to log in."""
         try:
             with open(filename, 'a', encoding='utf-8') as f:
                 f.write(line1)
                 f.write(line2)
             print('modified ✅')
-            return
-        except FileNotFoundError:
+        except FileNotFoundError as e:
             print('failed because of file not found ❌')
-            return
-        except PermissionError:
+            raise FirmwarePatchError(f'{filename} not found in the mounted image') from e
+        except PermissionError as e:
             print('failed because of permission ❌')
-            return
+            raise FirmwarePatchError(
+                f'no permission to write {filename} — re-run with sudo') from e
 
     def set_shadow_file(self, root_seed):
         """Set shadow file."""

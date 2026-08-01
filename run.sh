@@ -25,17 +25,27 @@ function file_older_than_days {
 	local filename=$1
 	local days=$(( $2 * 24 * 3600 ))
 	local -i date_diff=$(( $(date +%s) - $(date -r $filename +%s) ))
-	(( $days < date_diff_days ))
+	(( $days < date_diff ))
 }
+
+mkdir -p tmp
 
 # Check if requirements weren't updated in a week
 if file_older_than_days tmp/pip-required.txt 7; then
-	pip -vvv freeze -r requirements.txt 2>tmp/pip-required.txt >/dev/null
+	pip freeze -r requirements.txt 2>tmp/pip-required.txt >/dev/null || true
 fi
-# Install requirements if necessary
-if [ -s tmp/pip-required.txt ]; then
+# Install requirements if necessary. `pip freeze -r` writes the missing ones to
+# stderr, so a non-empty file means something still needs installing.
+if [ ! -s tmp/pip-required.txt ] || grep -qv '^$' tmp/pip-required.txt; then
 	pip install --upgrade pip
 	pip install -r requirements.txt
-	pip -vvv freeze -r requirements.txt 2>tmp/pip-required.txt >/dev/null
+	pip freeze -r requirements.txt 2>tmp/pip-required.txt >/dev/null || true
 fi
-python main.py
+
+# main.py loop-mounts the image and edits /etc/shadow inside it, so it needs
+# root — but the venv above is the invoking user's, so hand sudo its interpreter.
+if [ "$(id -u)" -eq 0 ]; then
+	python main.py
+else
+	sudo "$(command -v python)" main.py
+fi
