@@ -440,8 +440,8 @@ class PrepareFirmware():
         zip_file = f'{self.workingdir}/{self.filename}'
         if self.model in PrepareFirmware.firmwares:
             password = self.model.upper() # password is model name, uppercase
-        elif password_zip in zip_file:
-            password = password_zip
+        elif PrepareFirmware.password_zip in zip_file:
+            password = PrepareFirmware.password_zip
         else:
             print('No password found ❌')
             return
@@ -1050,12 +1050,10 @@ class PrepareFirmware():
         password = None
         output = self.fileout
         zip_file = f'{self.workingdir}/{output}'
-        if self.model == 'c300x':
-            password = PrepareFirmware.password
-        elif self.model == 'c100x':
-            password = PrepareFirmware.password2
-        elif PrepareFirmware.password3 in zip_file:
-            password = PrepareFirmware.password3
+        if self.model in PrepareFirmware.firmwares:
+            password = self.model.upper() # password is model name, uppercase
+        elif PrepareFirmware.password_zip in zip_file:
+            password = PrepareFirmware.password_zip
         else:
             print('No password found ❌')
             return
@@ -1072,7 +1070,7 @@ class PrepareFirmware():
         """Move SSH key file."""
         print('Moving SSH key file... ', end='', flush=True)
         output = self.fileout
-        fles = self.ssh_keys + [output]
+        fles = list(self.ssh_keys) + [output]
         for f in fles:
             subprocess.run(['mv',
                             f'{self.workingdir}/{f}', f'{cwd}/{f}'], check=False)
@@ -1088,7 +1086,7 @@ class PrepareFirmware():
         """Setup firmware rights."""
         print('Setting up firmware rights... ', end='', flush=True)
         output = self.fileout
-        fles = self.ssh_keys + [output]
+        fles = list(self.ssh_keys) + [output]
         for f in fles:
             subprocess.run(['chown', '-R', '1000:1000', f'{cwd}/{f}'], check=False)
             subprocess.run(['chmod', '-R', '755', f'{cwd}/{f}'], check=False)
