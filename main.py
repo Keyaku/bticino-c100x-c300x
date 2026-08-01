@@ -696,14 +696,19 @@ class PrepareFirmware():
         # Define files to copy with their destinations and permissions
         mqtt_files = [
             # (source, destination, permissions, required)
-            (f'{cwd}/mqtt_scripts/TcpDump2Mqtt', f'{self.mnt_loc}{dirm}/TcpDump2Mqtt', '775', True),
-            (f'{cwd}/mqtt_scripts/TcpDump2Mqtt.conf', f'{self.mnt_loc}{dirm}/TcpDump2Mqtt.conf', None, True),
-            (f'{cwd}/mqtt_scripts/TcpDump2Mqtt.sh', f'{self.mnt_loc}{dirm}/TcpDump2Mqtt.sh', '775', True),
-            (f'{cwd}/mqtt_scripts/StartMqttSend', f'{self.mnt_loc}{dirm}/StartMqttSend', '775', True),
-            (f'{cwd}/mqtt_scripts/StartMqttReceive', f'{self.mnt_loc}{dirm}/StartMqttReceive', '775', True),
-            (f'{cwd}/mqtt_scripts/filter.py', f'{self.mnt_loc}/home/root/filter.py', '775', True),
-            (f'{cwd}/mqtt_scripts/jq-linux-armhf', f'{self.mnt_loc}/usr/bin/jq', '775', True),
-            (f'{cwd}/mqtt_scripts/evtest', f'{self.mnt_loc}/usr/bin/evtest', '775', True),
+            (f'{cwd}/scripts/mqtt/TcpDump2Mqtt', f'{self.mnt_loc}{dirm}/TcpDump2Mqtt', '775', True),
+            (f'{cwd}/scripts/mqtt/TcpDump2Mqtt.conf', f'{self.mnt_loc}{dirm}/TcpDump2Mqtt.conf', None, True),
+            (f'{cwd}/scripts/mqtt/TcpDump2Mqtt.sh', f'{self.mnt_loc}{dirm}/TcpDump2Mqtt.sh', '775', True),
+            (f'{cwd}/scripts/mqtt/StartMqttSend', f'{self.mnt_loc}{dirm}/StartMqttSend', '775', True),
+            (f'{cwd}/scripts/mqtt/StartMqttReceive', f'{self.mnt_loc}{dirm}/StartMqttReceive', '775', True),
+            (f'{cwd}/scripts/mqtt/filter.py', f'{self.mnt_loc}/home/root/filter.py', '775', True),
+            (f'{cwd}/scripts/mqtt/jq-linux-armhf', f'{self.mnt_loc}/usr/bin/jq', '775', True),
+            (f'{cwd}/scripts/mqtt/evtest', f'{self.mnt_loc}/usr/bin/evtest', '775', True),
+            # Service watchdog — monitors dropbear, scsserver, mosquitto and
+            # TcpDump2Mqtt itself; installs as a standard init.d service so it
+            # runs independently and survives TcpDump2Mqtt crashes.
+            (f'{cwd}/scripts/mqtt/bt_service_watchdog',
+             f'{self.mnt_loc}/etc/init.d/bt_service_watchdog', '775', True),
         ]
         
         # Copy required MQTT files
@@ -789,6 +794,7 @@ class PrepareFirmware():
             (f'{self.mnt_loc}/home/root/filter.py', 'file', 'MQTT filter script'),
             (f'{self.mnt_loc}/usr/bin/jq', 'file', 'jq utility'),
             (f'{self.mnt_loc}/usr/bin/evtest', 'file', 'evtest utility'),
+            (f'{self.mnt_loc}/etc/init.d/bt_service_watchdog', 'file', 'Service watchdog init script'),
         ]
         
         missing_items = []
@@ -888,7 +894,26 @@ class PrepareFirmware():
                 print('❌')
                 print(f'ERROR: Symbolic link was not created: {symlink_name}')
                 return False
-            
+
+            # Enable the service watchdog (S99BtServiceWatchdog sorts before
+            # S99TcpDump2Mqtt so it starts first, ensuring critical daemons are
+            # monitored from the moment TcpDump2Mqtt launches).
+            watchdog_symlink = 'S99BtServiceWatchdog'
+            watchdog_target = '../init.d/bt_service_watchdog'
+            watchdog_full_path = f'{self.mnt_loc}/etc/init.d/bt_service_watchdog'
+            if os.path.exists(watchdog_full_path):
+                if os.path.exists(watchdog_symlink) or os.path.islink(watchdog_symlink):
+                    subprocess.run(['sudo', 'rm', watchdog_symlink],
+                                   capture_output=True, text=True)
+                result = subprocess.run(['sudo', 'ln', '-s', watchdog_target, watchdog_symlink],
+                                        capture_output=True, text=True)
+                if result.returncode == 0:
+                    self.logger.info(f'Service watchdog enabled: {rc5_dir}/{watchdog_symlink}')
+                else:
+                    self.logger.warning(f'Failed to create watchdog symlink: {result.stderr.strip()}')
+            else:
+                self.logger.warning('bt_service_watchdog not found in /etc/init.d, skipping watchdog symlink')
+
             print('done ✅')
             self.logger.info(f'MQTT service enabled successfully with symlink: {rc5_dir}/{symlink_name}')
             return True

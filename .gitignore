@@ -1,11 +1,28 @@
-# Python
-.venv/
-
-# VSCode
-.vscode
-*.code-workspace
-
-# Various
-*.log
-*.fwz
+# === Secrets / credentials — DO NOT COMMIT ===
 bticinokey*
+certs/
+scripts/ha_config/my_login_details.md
+scripts/ha_config/info_wifi.txt
+*.pem
+*.key
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+bticinoenv/
+
+# === Firmware blobs (large binaries) ===
+*.fwz
+
+# === Editor / OS ===
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# === Various ===
+*.log
