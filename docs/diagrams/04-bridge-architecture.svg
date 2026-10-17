@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 460" width="1040" height="460" role="img" aria-labelledby="t d">
+  <title id="t">Bridge architecture</title>
+  <desc id="d">The bridge sits between the native BTicino processes and Home Assistant. It monitors OpenWebNet passively on port 20000 and sends commands to localhost with netcat, opening no competing sockets, so it coexists with openserver, bt_vct and bt_av_media. It exposes MQTT, HomeKit, a web dashboard and RTSP to Home Assistant.</desc>
+  <style>
+    .bg{fill:#0f1720}
+    .box{fill:#1b2a3a;stroke:#4aa3ff;stroke-width:2}
+    .native{fill:#221b2f;stroke:#a371f7;stroke-width:2}
+    .ha{fill:#132235;stroke:#3fb950;stroke-width:2}
+    .mid{fill:#102a2a;stroke:#2bb3b3;stroke-width:2}
+    .t{fill:#e6edf3;font-family:sans-serif;font-size:15px;text-anchor:middle}
+    .s{fill:#8b98a5;font-family:sans-serif;font-size:12px;text-anchor:middle}
+    .code{fill:#9fe0b0;font-family:monospace;font-size:12px;text-anchor:middle}
+    .ln{stroke:#8b98a5;stroke-width:2;fill:none;marker-end:url(#a)}
+    .warnln{stroke:#d29922;stroke-width:2;stroke-dasharray:6 4;fill:none}
+    .h{fill:#e6edf3;font-family:sans-serif;font-size:14px;font-weight:bold;text-anchor:middle}
+    .cap{fill:#cdd7e0;font-family:sans-serif;font-size:13px;text-anchor:middle}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b98a5"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1040" height="460"/>
+  <text class="cap" x="520" y="30">On-device bridge, by design non-interfering with the native stack</text>
+
+  <text class="h" x="150" y="70">Native BTicino</text>
+  <rect class="native" x="40" y="90"  width="220" height="50" rx="8"/>
+  <text class="t" x="150" y="120">openserver</text>
+  <rect class="native" x="40" y="160" width="220" height="50" rx="8"/>
+  <text class="t" x="150" y="190">bt_vct</text>
+  <rect class="native" x="40" y="230" width="220" height="50" rx="8"/>
+  <text class="t" x="150" y="260">bt_av_media</text>
+
+  <rect class="mid" x="410" y="150" width="220" height="150" rx="10"/>
+  <text class="h" x="520" y="185">bticino-bridge</text>
+  <text class="s" x="520" y="212">monitor only :20000</text>
+  <text class="code" x="520" y="236">echo '...' | nc 0 30006</text>
+  <text class="s" x="520" y="262">no competing sockets</text>
+  <text class="s" x="520" y="284">VideoPort / ConfigPort = 0</text>
+
+  <text class="h" x="890" y="70">Home Assistant</text>
+  <rect class="ha" x="780" y="90"  width="220" height="46" rx="8"/>
+  <text class="t" x="890" y="118">MQTT (auto-discovery)</text>
+  <rect class="ha" x="780" y="150" width="220" height="46" rx="8"/>
+  <text class="t" x="890" y="178">HomeKit</text>
+  <rect class="ha" x="780" y="210" width="220" height="46" rx="8"/>
+  <text class="t" x="890" y="238">Web dashboard :8082</text>
+  <rect class="ha" x="780" y="270" width="220" height="46" rx="8"/>
+  <text class="t" x="890" y="298">RTSP video :6554</text>
+
+  <path class="warnln" d="M260,115 C330,120 350,170 408,195"/>
+  <path class="ln"     d="M408,235 C350,265 330,255 262,255"/>
+  <text class="s" x="335" y="150">passive monitor</text>
+  <text class="s" x="335" y="300">nc to localhost</text>
+
+  <path class="ln" d="M632,200 L778,113"/>
+  <path class="ln" d="M632,215 L778,173"/>
+  <path class="ln" d="M632,240 L778,233"/>
+  <path class="ln" d="M632,260 L778,293"/>
+</svg>

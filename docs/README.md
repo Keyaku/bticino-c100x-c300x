@@ -34,5 +34,13 @@ rooted device.
 
 ## Diagrams
 
-Diagrams of the end-to-end flow, the flasher protocol, the builder pipeline, the
-bridge architecture, and cloud-survival mode live in `diagrams/`.
+- [End-to-end flow](diagrams/01-end-to-end.svg) — from your firmware to a device
+  running in Home Assistant.
+- [Flasher protocol](diagrams/02-flasher-protocol.svg) — the USB link, the
+  write state machine, and the safety gates.
+- [Builder pipeline](diagrams/03-builder-pipeline.svg) — how a rooted image is
+  built offline from your `.fwz`.
+- [Bridge architecture](diagrams/04-bridge-architecture.svg) — the bridge
+  between the native stack and Home Assistant, and the non-interference rule.
+- [Cloud-survival mode](diagrams/05-cloud-survival.svg) — what is cut or
+  redirected and what keeps working, reversibly.
