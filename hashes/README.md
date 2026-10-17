@@ -17,7 +17,15 @@ cd /folder/with/your/firmware
 sha256sum -c /path/to/repo/hashes/known-good.sha256
 ```
 
-Each matching file prints `OK`. A file not present on disk is simply skipped.
+Each file you actually have prints `OK`. For a version listed here that you
+*don't* have, `sha256sum -c` prints `c300x_x.y.z.fwz: FAILED open or read`,
+warns that a listed file could not be read, and exits non-zero. That is
+expected and does **not** mean your image is bad — only the line matching the
+file you own needs to read `OK`. To check just your file and ignore the rest:
+
+```sh
+sha256sum -c known-good.sha256 2>/dev/null | grep c300x_1.7.19.fwz
+```
 
 ## What happens with a version that is not listed
 
