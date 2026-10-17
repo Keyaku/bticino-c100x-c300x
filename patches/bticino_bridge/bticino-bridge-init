@@ -1,0 +1,100 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          bticino-bridge
+# Required-Start:    $network $local_fs
+# Required-Stop:     
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: BTicino Bridge MQTT/Web/HomeKit
+# Description:       Enhanced bridge for BTicino Classe 300X
+### END INIT INFO
+
+BRIDGE_DIR=/home/bticino/cfg/extra
+BRIDGE_BINARY=$BRIDGE_DIR/bticino-bridge
+BRIDGE_CONFIG=$BRIDGE_DIR/configs/config.yaml
+BRIDGE_LOG=/tmp/bticino-bridge.log
+PIDFILE=$BRIDGE_DIR/bticino_bridge.pid
+AUTOSTART_FLAG=$BRIDGE_DIR/.bridge_autostart
+
+start_bridge() {
+    if [ ! -f "$AUTOSTART_FLAG" ]; then
+        return 0
+    fi
+    
+    if [ ! -x "$BRIDGE_BINARY" ]; then
+        echo "BTicino Bridge binary not found or not executable"
+        return 1
+    fi
+    
+    echo "Starting BTicino Bridge..."
+    
+    # Start firewall first
+    if [ -x /etc/init.d/firewall-bticino ]; then
+        /etc/init.d/firewall-bticino start
+    fi
+    
+    # Start bridge from correct directory
+    cd $BRIDGE_DIR
+    $BRIDGE_BINARY -config=$BRIDGE_CONFIG >> $BRIDGE_LOG 2>&1 &
+    echo $! > $PIDFILE
+    
+    # Wait a moment and check if started
+    sleep 2
+    if kill -0 $(cat $PIDFILE) 2>/dev/null; then
+        echo "BTicino Bridge started successfully"
+        return 0
+    else
+        echo "Failed to start BTicino Bridge"
+        return 1
+    fi
+}
+
+stop_bridge() {
+    if [ -f "$PIDFILE" ]; then
+        PID=$(cat $PIDFILE)
+        if [ -n "$PID" ]; then
+            kill $PID 2>/dev/null
+            sleep 1
+            kill -9 $PID 2>/dev/null
+            rm -f $PIDFILE
+        fi
+    fi
+    # Also kill by name
+    pkill -9 bticino-bridge 2>/dev/null
+    echo "BTicino Bridge stopped"
+}
+
+status_bridge() {
+    if [ -f "$PIDFILE" ]; then
+        PID=$(cat $PIDFILE)
+        if [ -n "$PID" ] && kill -0 $PID 2>/dev/null; then
+            echo "BTicino Bridge is running (PID: $PID)"
+            return 0
+        fi
+    fi
+    echo "BTicino Bridge is not running"
+    return 1
+}
+
+case "$1" in
+    start)
+        start_bridge
+        ;;
+    stop)
+        stop_bridge
+        ;;
+    restart)
+        stop_bridge
+        sleep 2
+        start_bridge
+        ;;
+    status)
+        status_bridge
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0
