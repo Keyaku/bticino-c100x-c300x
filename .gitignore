@@ -6,6 +6,7 @@ ha_config/my_login_details.md
 ha_config/info_wifi.txt
 *.pem
 *.key
+*.crt
 
 # === Python ===
 __pycache__/
