@@ -1,5 +1,548 @@
 # Changelog - BTicino Classe 300X Enhanced Bridge
 
+## [0.29.4] - 2026-10-16
+
+### Corregido
+- **`AudioCall.Say` (talk-back de WAV) no colgaba.** El diálogo quedaba vivo hasta
+  que el nativo lo cortaba, y el vigilante del cliente SIP retenía mientras tanto el
+  socket webrtc (re-REGISTER aplazado). Ahora ocupa la pata única
+  (`ErrAudioLegBusy`) y cuelga siempre al terminar, también si el answer SDP es
+  inválido (no deja diálogo huérfano).
+- **`MakeCall` (vídeo bajo demanda) roto desde la 0.29.0.** El listener c300x dejó
+  de auto-contestar TODAS las llamadas que originamos, pero solo las de
+  `InviteWithSDP` (ojo, AudioCall) deben ir al nativo. Nuevo registro
+  `nativeCalls` para esas; el self-INVITE de vídeo vuelve a auto-contestarse en
+  loopback. Solo afecta con `streaming.video_on_demand: true`.
+- **Pulsar "Ver placa" con un ojo ya abierto** daba el log engañoso "llamada
+  nativa/contestador activa" (el propio ojo enciende el canal nativo) y publicaba
+  `panelview.rejected`, que ponía el sensor HA en `idle` con el ojo abierto. Ahora
+  se comprueba antes el ojo propio: `ErrEyeBusy`, log Info "ya hay un ojo activo",
+  sin tocar el sensor.
+
+## [0.29.3] - 2026-10-16
+
+### Corregido
+- **La tarjeta de HA no pintaba vídeo** aunque el vídeo llegara al relay. Causa
+  (reproducida en local con el mismo comando): el stream `doorbell` de go2rtc es un
+  ffmpeg que transcodifica el audio (`-c:a pcm_alaw`) y **no emite nada —ni vídeo—
+  hasta recibir el primer paquete de audio válido**; sin él, go2rtc mata el exec
+  por timeout (`ERR [exec] timeout`). Desde que `streaming.live_audio_on_call` quedó
+  en `false` (09-oct) la pista de audio del RTSP iba vacía, y el OÍR del ojo salía
+  con PT98 en vez del PT110 del SDP (ffmpeg lo descartaba).
+- **Pista de audio siempre viva** (`pkg/sip/rtp_relay_fill.go`): el relay de audio
+  reescribe todo con un solo SSRC, secuencia continua y PT110, e inyecta silencio
+  speex cada 20 ms si no llega audio (mismas tramas que `talk_keepalive`; validado
+  que ffmpeg las decodifica y empieza a emitir). El vídeo ya no depende de que haya
+  una fuente de audio activa.
+- **OÍR del ojo con prioridad:** PanelView reenvía a una entrada prioritaria del
+  relay (`127.0.0.1:10012`); mientras llegue audio por ahí se descarta el tap de
+  `lo:5000` (mudo en modo ojo), así que en HA se oye la calle y nunca se mezclan dos
+  flujos.
+
+- **La imagen tardaba hasta ~90 s (o no llegaba) en la tarjeta.** En reposo el RTSP
+  no emitía vídeo, el ffmpeg de go2rtc moría por timeout a los 30 s y go2rtc lo
+  relanzaba cada ~90 s; si el ojo (30 s) caía en el hueco no había imagen (visto en
+  vivo el 16-oct). Ahora el relay de vídeo emite un **fondo negro H.264 a 1 fps** en
+  reposo (`pkg/sip/rtp_relay_vfill.go`, IDR embebido con la misma cabecera que la
+  placa: Constrained Baseline 3.0, 688x480), con un solo SSRC y secuencia continua;
+  el vídeo real conserva marker y separación de timestamps y desplaza al fondo al
+  instante. Validado en local de punta a punta con el comando de go2rtc: ffmpeg se
+  mantiene conectado en reposo y pasa fondo → vídeo real → fondo sin errores.
+
+### Notas
+- En el device se volvió a poner `live_audio_on_call: true` (arreglo inmediato, con
+  copia `config.yaml.bak-pre-live-audio-202610162317`). Con esta versión ya no es
+  imprescindible para ver la imagen, pero sigue aportando el audio de lo:5000 en
+  las llamadas normales.
+
+## [0.29.2] - 2026-10-16
+
+### Corregido
+Tres fallos SIP encadenados que el gate en vivo de la v0.29.1 (22:47) destapó: el
+primer ojo iba perfecto (30 s completos), pero el segundo daba timeout.
+- **El BYE no llegaba al `bt_vct`.** Iba a `sip:c300x@dominio` sin `Route`; Flexisip
+  no lo entregaba y el nativo seguía en llamada hasta su `nortp_timeout` (~30 s),
+  contestando **486** a cualquier ojo en ese margen (también los 486 del 09-oct).
+  Ahora ACK y BYE van al **Contact** del 200 OK con **Route = Record-Route
+  invertido** (RFC 3261 §12.1.2).
+- **El listener c300x ignoraba la rama del fork con nuestro propio INVITE.**
+  Flexisip esperaba esa rama y no reenviaba la respuesta final del nativo (su 486):
+  el ojo acababa en timeout de 30 s. Ahora contesta **480** (To-tag estable por
+  Call-ID; un 2xx del nativo prevalece). El ACK de ese 480 y un BYE de diálogo
+  propio ya no tocan el estado de sesión.
+- **Dos lectores por socket.** El re-REGISTER leía el socket webrtc a la vez que el
+  INVITE o el vigilante (`Failed to refresh webrtc registration`), y en c300x el
+  listener se comía la respuesta del re-REGISTER (`Failed to refresh c300x
+  registration ... i/o timeout` cada ~4-5 min, desde antes de la 0.29). Ahora cada
+  socket tiene un único lector: en c300x el listener entrega las respuestas por
+  canal; en webrtc el INVITE y el vigilante poseen el lector y el re-REGISTER lo
+  intenta sin bloquear (se aplaza si está ocupado). La renovación se comprueba
+  cada 30 s y se hace a mitad de la expiración (margen de sobra para reintentos).
+- **Endurecido tras revisión independiente:** el bucle del INVITE **traspasa** el
+  lector al vigilante del diálogo (no lo suelta), así que el vigilante nunca lo
+  espera (sin interbloqueo posible con `stopDialogWatch`) y el re-REGISTER no se
+  cuela entre el ACK y la vigilancia; la respuesta del REGISTER se casa por CSeq
+  completa (número + método) y se vacían respuestas rezagadas antes de enviar;
+  timeout del REGISTER a 3 s (Flexisip es local); aviso Warn si el refresco lleva
+  tiempo aplazado y el registro se acerca a caducar; un diálogo entrante
+  auto-contestado ya no hereda la ruta de un ojo previo.
+
+### Notas
+- Regresión latente detectada, sin tocar: desde la 0.29.0 `MakeCall` (self-INVITE
+  de vídeo bajo demanda) registra su Call-ID en `originatedCalls` y el listener ya
+  no lo auto-contesta. Solo afecta con `streaming.video_on_demand: true`
+  (desactivado por defecto y en el device).
+
+## [0.29.1] - 2026-10-16
+
+### Corregido
+- **"Ver placa" colgaba nada más conectar (BYE inmediato).** Causa raíz
+  (diagnosticada en estático con `/tmp/linphone.log` del device, sin prueba en
+  vivo): `InviteWithSDP` y `MakeCall` aceptaban el **primer** `200` que leían del
+  socket webrtc sin comprobar Call-ID ni CSeq. `Hangup()` envía el BYE sin
+  consumir su `200`, así que en el siguiente ojo ese `200` sin SDP se tomaba como
+  respuesta → `ParseAudioAnswer` fallaba → BYE. El `200` real del `bt_vct` se
+  quedaba sin ACK y el nativo lo retransmitía ~32 s (vídeo "huérfano", rechazos
+  `callActive`, 486 Busy), envenenando también el intento siguiente. Ahora solo se
+  acepta una respuesta con nuestro Call-ID y CSeq de INVITE, y a los BYE de otros
+  diálogos que llegan por ese socket se les contesta `200`.
+- **El ojo se entera de que el nativo lo cuelga.** Tras el ACK nadie leía el
+  socket webrtc: el BYE del `bt_vct` se quedaba sin `200` (retransmitido) y el
+  sensor seguía en `viewing` con OÍR/HABLAR armados hasta el auto-off. Ahora un
+  vigilante del diálogo (`pkg/sip/dialog_watch.go`) contesta `200` al BYE remoto y
+  publica `sip.dialog.ended{call_id, reason: remote_bye}`; PanelView desmonta sin
+  BYE propio (`panelview.ended` con `reason: remote_bye`). El vigilante se para y
+  se espera **antes** de cualquier `InviteWithSDP`/`MakeCall`/`Hangup`: nunca hay
+  dos lectores en el socket.
+- **PanelView ya no se traga los errores:** un INVITE fallido o un answer SDP
+  inválido se loguean a nivel Warn (antes `Show()` se invocaba desde el bus con el
+  error descartado y el fallo era invisible).
+
+### Notas
+- Análisis estático de la app oficial 1.17.3 (jadx): el micro se silencia en
+  local (sin re-INVITE ni trama OWN), el ojo no tiene timeout en la app, y un
+  INVITE entrante durante el ojo se rechaza con 486 (`max_calls=1`) sin colgarlo.
+  Contrastado con el bridge: la subida continua ya existe (`talk_keepalive`,
+  v0.27.0) y el answer del timbre ya va con audio `sendrecv`. Se mantiene la
+  cesión del ojo a un timbre real (no 486): prima la visita.
+
+## [0.29.0] - 2026-10-08
+
+### Añadido
+- **"Ver placa" (`PanelView`): autoaccensión a demanda desde HA.** Un botón HA
+  (`bticino_ver_placa`) publica `panelview.request` en el bus; el subsistema
+  origina un INVITE "de ojo" hacia el c300x con `DEVADDR` (la dirección OWN de la
+  placa de calle) y vídeo `recvonly` / audio `sendrecv`, para que la placa se
+  encienda sin que nadie pulse en el monitor. Sensor HA **Placa en vista**
+  (`bticino_placa_en_vista`) con estados `viewing` / `idle` (`dp/panelview/state`).
+- **Tres pistas de media, ya cableadas:**
+  - **VER:** tap pasivo de `lo:5007` armado por `sip.call.connected`, igual que
+    la llamada normal.
+  - **OÍR:** `AudioReceiver.CaptureForward` descifra el SRTP de bajada en línea y
+    lo reenvía a relé `127.0.0.1:10000`.
+  - **HABLAR:** `TalkSender` se arma con `panelview.connected` (modo ojo). Requiere
+    `sip.answerer.talk_enabled: true`.
+- **Ciclo de vida:** auto-off a ~30 s (`timeout_seconds`) con BYE; cede a un
+  timbre real (un timbrazo entrante tiene prioridad sobre el ojo); el listener
+  c300x ignora los INVITE originados por PanelView (correlación de Call-ID) para
+  no auto-contestarse.
+- **Fail-closed:** bloque nuevo `streaming.panelview` con `enabled: false` por
+  defecto. Sin `devaddr` no dispara. Ver `docs/panel-view-setup.md`.
+
+### Notas
+- **Requiere añadir el bloque `streaming.panelview` al `config.yaml` del device**
+  (el deploy no sube el config), y `sip.answerer.talk_enabled: true` (con
+  `sip.answerer.enabled: true`) para que HABLAR funcione.
+- **Gate en vivo pendiente.** Esta versión no está validada en vivo. El gate
+  debe confirmar dos cosas: (1) que el INVITE con `DEVADDR` llega al `bt_vct`
+  nativo y enciende la placa sin reiniciar el c300x (sonda de uptime), y (2) que
+  el `DEVADDR` se captura de un timbrazo real en `/tmp/linphone.log`. Hasta
+  entonces, `enabled` debe quedarse en `false` en el device.
+- **No-interferencia:** el patrón del bridge no cambia (monitor en 20000,
+  comandos por `nc` a localhost). Hay que confirmarlo en el gate.
+
+## [0.28.0] - 2026-10-06
+
+### Añadido
+- **Tipo de llamada entrante en HA.** El contestador clasifica cada INVITE por su
+  SDP, con la misma señal que usa la app oficial 1.17.3 (si el remoto trae
+  vídeo): `placa` si hay `m=video` con puerto distinto de 0, `intercom` si solo
+  hay audio, `desconocido` si no hay líneas `m=` legibles
+  (`pkg/sip/call_type.go`). `doorcall.incoming` lleva `call_type`, y el sensor
+  HA **Contestador** lo expone como atributo (`json_attributes_topic`
+  `bticino/answerer/attributes`, publicado antes del estado `ringing`).
+- Alcance honesto: solo la llamada de placa está respaldada por capturas.
+  `intercom` es conjetura (no hay captura de una llamada entre monitores) y en
+  una instalación con un único monitor interior saldrá siempre `placa`. El
+  contestador como llamante no se modela: no hay evidencia de que llegue por SIP.
+
+### Mantenimiento
+- `go test -race ./...` y `gofmt -l` ahora pasan limpios en todo el bridge: la
+  carrera estaba en `pkg/events/bus_test.go` (estado compartido con el handler
+  sin sincronizar), no en el EventBus; formateados `talkback.go`,
+  `media_events.go`, `config_manager.go` y `talkback_say_test.go` (solo formato).
+
+## [0.27.0] - 2026-10-06
+
+### Añadido
+- **Subida de audio continua (`answerer.talk_keepalive`).** Ataca el bloqueo del
+  gate F1 en vivo: se contesta y se ve, pero no se oye al visitante hasta abrir la
+  puerta. Hipótesis RTP simétrico: la placa no manda el audio de bajada hasta
+  recibir audio de subida. Nuevo relé RTP `upstreamKeepalive`
+  (`pkg/sip/talk_keepalive.go`) delante de ffmpeg: escucha el micro de HA
+  (backchannel go2rtc :40004) y emite un flujo **continuo** hacia ffmpeg
+  (:40006): reenvía la voz al instante y, si el micro calla más de 60 ms, inyecta
+  una trama speex de silencio cada 20 ms (38 bytes, generada con libspeex).
+  Secuencia/SSRC propios y timestamp de reloj real. ffmpeg no cambia (copy +
+  SRTP); solo lee del relé, así nunca se queda sin paquetes.
+- Mezclar en ffmpeg con `amix` se descartó: comprobado que se bloquea si la
+  entrada del micro no trae paquetes, y no sale ni el silencio.
+- **Fail-closed:** `talk_keepalive: false` por defecto ⇒ comportamiento idéntico
+  al anterior. Requiere `talk_enabled: true`. Si el relé no arranca, cae al camino
+  clásico (hablar sin keepalive mejor que no hablar).
+- **Para probarlo en el device** hay que añadir `talk_keepalive: true` al
+  `config.yaml` del device (el deploy no sube el config).
+
+### Notas
+- Validado en local con un ffmpeg real (SRTP continuo sin micro). Falta lo único
+  que no se puede probar sin timbrazo: que la placa abra el audio de bajada.
+- Reemplaza al experimento de `talk_sender` (silencio en lugar del micro), que
+  queda en la rama `experimento-talk-silencio`: este keepalive manda silencio
+  **y** conserva el micro de HA.
+
+## [0.26.2] - 2026-10-06
+
+### Corregido
+- **Contestador atascado en RINGING (guarda de timbre).** No había temporizador
+  mientras sonaba: si nadie contestaba desde HA y el CANCEL de la placa se
+  perdía, el contestador se quedaba sonando para siempre y respondía `486 Busy`
+  a todos los timbrazos siguientes hasta reiniciar el bridge. Ahora, a los
+  `ring_timeout_seconds` (default **70**, el mismo valor que usa la app oficial
+  1.17.3 para la llamada entrante), cierra el INVITE con `480 Temporarily
+  Unavailable` y vuelve a idle. Se desarma al contestar, al cancelar y en
+  `Stop()` (sin esto la guarda podía dispararse tras parar el bridge y publicar
+  en el bus ya cerrado → panic; cubierto por test). Default en código: el device
+  no necesita cambiar su `config.yaml`.
+
+### Cambiado
+- **Vídeo `recvonly` en el answer del contestador.** El SDP declaraba el vídeo
+  `sendrecv`, pero el bridge solo recibe el vídeo de la placa (no tiene cámara).
+  La app oficial 1.17.3 contesta con `VideoDirection RecvOnly`. No afecta al
+  vídeo que llega a HA (tap pasivo / RTSP).
+
+### Notas
+- `max_call_seconds` (120 s) ya limitaba la llamada contestada; sin cambios.
+- Origen: análisis jadx de la app oficial 1.17.3
+  (`_investigacion/hack/DoorEntry_1.17.3_jadx/`).
+
+## [0.26.1] - 2026-08-24
+
+### Corregido
+- **Crash del contestador (F1) al contestar en el device (ARM32).** `mediaDrain`
+  (`pkg/sip/answerer_drain.go`) incrementaba contadores `int64` con
+  `atomic.AddInt64` sobre campos que, tras tres punteros (12 bytes en ARMv7),
+  quedaban alineados a 4 y no a 8 bytes → `panic: unaligned 64-bit atomic
+  operation` que tumbaba **todo el proceso** justo al armar el drenaje de media
+  en una llamada real (invisible en los tests, que corren en amd64 donde los
+  atómicos de 64 bits siempre están alineados). Detectado en el gate F1 en vivo.
+  Arreglado migrando los cuatro contadores a `atomic.Int64` (Go 1.19+), que el
+  compilador alinea a 8 bytes en todas las plataformas. `RTPRelay` ya evitaba
+  esto colocando sus contadores como primeros campos; `mediaDrain` era el único
+  sitio afectado.
+
+## [0.26.0] - 2026-08-23
+
+### Añadido
+- **F2: hablar desde Home Assistant durante la llamada contestada.** Completa
+  el contestador de v0.25.0 con el sentido que faltaba (subida): con
+  `sip.answerer.talk_enabled: true`, al contestar (`doorcall.answered`) el
+  bridge lanza un `ffmpeg` hijo que recibe el backchannel de go2rtc (el botón
+  de micro de la tarjeta WebRTC HA, RTP speex sin cifrar en
+  `127.0.0.1:40004`), lo re-etiqueta al PT del answer y lo reenvía como SRTP
+  (con la clave que el propio bridge anunció en el SDP) al puerto de audio de
+  la placa — sin transcodificar (`-acodec copy`). Se mata en `doorcall.ended`
+  o en el shutdown del proceso.
+- `pkg/sip/talk_sdp.go` (`BuildBackchannelSDP`): SDP que describe, para
+  ffmpeg-como-receptor, el RTP speex/8000 que llega del backchannel de go2rtc.
+- `pkg/sip/talk_sender.go` (`TalkSender`, `NewTalkSender`, `buildFFmpegArgs`):
+  se suscribe a `doorcall.answered`/`doorcall.ended` vía el `EventBus`; lanza
+  el ffmpeg de talk-back a través de un `ProcRunner` inyectado (testeable sin
+  proceso real) y guarda `Proc` + el SDP temporal bajo mutex; `Stop()`
+  idempotente. **Un fallo del ffmpeg (no arranca, muere, sale con error) nunca
+  tumba la llamada contestada**: se loguea y se ignora.
+- `pkg/sip/proc_runner.go` (`ProcRunner`, `Proc`, `ExecRunner`,
+  `NewExecRunner`): runner real basado en `os/exec`, inyectado en
+  `cmd/main.go`; en los tests de `TalkSender` se sustituye por un fake sin
+  tocar el sistema.
+- `cmd/main.go`: dentro del bloque del Answerer (F1), tras `answerer.Start()`
+  y `webServer.SetAnswerer(answerer)`, si `cfg.SIP.Answerer.TalkEnabled`
+  construye `sip.NewTalkSender(cfg.SIP.Answerer, sip.NewExecRunner(),
+  eventBus, logger, "/usr/local/bin/ffmpeg", "127.0.0.1", 40004, 97)` y lo
+  arranca (`talkSender = nil` si `Start()` falla, sin abortar el contestador).
+  `var talkSender *sip.TalkSender` declarado junto a `var answerer
+  *sip.Answerer`; en el shutdown, `talkSender.Stop()` corre **antes** de
+  `answerer.Stop()` para no dejar un ffmpeg huérfano si el answerer cae primero.
+
+### Notas
+- **Objetivo norte cubierto en código:** oír + ver + **hablar** desde HA
+  durante una llamada, sin la app, queda implementado de punta a punta con
+  esta pieza (ver `docs/internal/specs/2026-08-22-sip-answerer-design.md`
+  y la nota de memoria `internal-note`). **Pendiente el gate en
+  vivo** (contestar desde HA + pulsar el micro de la tarjeta WebRTC +
+  confirmar que se oye por la placa) — no se ha validado contra el device
+  real todavía; ver `docs/answerer-setup.md` §Hablar (F2).
+- **Fail-closed:** `talk_enabled: false` por defecto (config ya existía desde
+  F1); esta versión no cambia `configs/config.yaml`, solo activa el camino de
+  código que ese flag gatea. Como siempre, `deploy-standard.sh` no pushea
+  `config.yaml` — hay que poner `talk_enabled: true` a mano en el device.
+- **ffmpeg del device:** se reutiliza la misma ruta absoluta que ya usan
+  `audio_sender`/`audio_receiver`/`audio_tap_decode`/`greeting_handlers`
+  (`/usr/local/bin/ffmpeg`, estático, con `libspeex` y protocolo `srtp`), no
+  el `ffmpeg` del PATH del servicio.
+- **No-interferencia:** el bridge no abre sockets propios nuevos; el único
+  socket adicional es el que abre el propio ffmpeg hijo (`127.0.0.1:40004` de
+  entrada, `srtp://<host>:<audioPort>` de salida hacia la placa); no se toca
+  `client.go` ni la config de go2rtc (el backchannel `exec:` hacia `:40004` ya
+  estaba cableado desde antes).
+
+## [0.25.0] - 2026-08-23
+
+### Añadido
+- **F1: contestador SIP bajo demanda desde Home Assistant.** El bridge puede
+  ahora responder la llamada SIP entrante del c300x (el fork que hace hacia
+  Flexisip al pulsar el timbre) sin necesidad de la app: `button.bticino_contestar`
+  / `button.bticino_colgar` + `sensor.bticino_contestador` (nuevo, MQTT) junto al
+  vídeo/audio ya expuestos por los taps pasivos de v0.24.x. Sin auto-answer: la
+  llamada solo se contesta si un humano pulsa el botón desde HA.
+- `pkg/sip/answerer.go` (`Answerer`, FSM completa) + `pkg/sip/answerer_tcp.go`
+  (`TCPTransport`, registro/transporte contra el Flexisip local por TCP) +
+  drenaje de media SRTP (audio/vídeo) hacia los puertos locales configurados
+  (`sip.answerer.audio_port`/`video_port`) para que los taps de v0.24 puedan
+  seguir sirviendo vídeo/audio a HA durante la llamada contestada.
+- `pkg/sip/route_check.go` (`CheckAnswererRoute`): comprobación **read-only** de
+  que el AOR (`sip.answerer.user@sip.domain`) está dado de alta en
+  `route_ext.conf` de Flexisip; si falta, solo avisa (no bloquea el arranque).
+- `cmd/main.go`: wiring del contestador — flag `-enable-answerer` (default
+  `true`), gate `cfg.SIP.Answerer.Enabled = cfg.SIP.Answerer.Enabled &&
+  cfg.SIP.Enabled && *enableAnswerer`, construcción (route-check + `TCPTransport`
+  + `Answerer.Start()` + `webServer.SetAnswerer`) fuera del bloque `if
+  cfg.SIP.Enabled` para que compile igual con SIP apagado, y parada en el
+  shutdown **antes** de `sipClient.Stop()` (para que la pata del contestador
+  mande BYE primero si hay una llamada en curso).
+- Config `sip.answerer` (nuevo bloque, **fail-closed**: `enabled: false` por
+  defecto): `user`, `audio_port`, `video_port` (`-1` = rechazar `m=video`,
+  audio-only), `max_call_seconds` (guard anti-placa-ocupada), `talk_enabled`
+  (reservado para F2, aún inerte), `route_file`.
+- `docs/answerer-setup.md`: runbook de puesta en marcha (alta de la ruta en
+  Flexisip con `scripts/setup_answerer_route.sh`, reinicio de Flexisip —
+  **nunca SIGHUP**, bloque de config del device, tarjeta de dashboard HA
+  `portero-bticino`, automatización opcional de notificación móvil).
+
+### Notas
+- **F2 (hablar) queda pendiente.** `talk_enabled` existe en config pero no
+  tiene implementación todavía: el contestador solo drena/expone audio+vídeo
+  entrantes (oír/ver), no inyecta el backchannel del operador de HA hacia la
+  puerta. Se abordará en una fase posterior.
+- **Fail-closed en cascada:** con `sip.answerer.enabled: false` (default) el
+  bloque de wiring en `main.go` no hace nada — ni abre el `TCPTransport` ni
+  registra rutas en el webserver. `deploy-standard.sh` **no pushea
+  `config.yaml`**: hay que dar de alta el bloque `sip.answerer` (con
+  `enabled: true`) a mano en el device tras registrar la ruta, ver
+  `docs/answerer-setup.md`.
+- No-interferencia: el contestador solo abre una conexión TCP a
+  `127.0.0.1:5060` (el Flexisip local, mismo patrón que el resto del pipeline
+  SIP) y sockets UDP de drenaje en `10100`/`10102`; cero puertos nuevos hacia
+  el firmware nativo (`30006`/`30007`/vídeo intactos).
+- **Riesgo residual sin confirmar (F0):** la coexistencia con el monitor
+  interior mientras el contestador tiene la llamada abierta no se ha validado
+  en vivo todavía; ver `docs/answerer-setup.md` §5.
+
+## [0.24.0] - 2026-08-22
+
+### Añadido
+- **Armado de las tres pistas de media por canal-up nativo.** Las tres pistas
+  (`live-video`, `live-audio`, `audio-listen`) ahora arman también en el evento
+  `media.channel.up`, publicado cuando el monitor OWN del bus recibe el frame
+  de canal-up nativo (`*7*300#…#5000#*` audio / `*7*300#…#5007#*` vídeo),
+  detectado por el nuevo helper `bticino.IsMediaChannelUp`.
+- Motivo (validación en vivo B1, 2026-08-22): abrir cámara + micrófono desde la
+  app es **auto-activación nativa** (OpenWebNet WHO=7/8), NO una llamada SIP, así
+  que los disparadores existentes `sip.call.*`/`doorbell.pressed` no se activan
+  y las pistas nunca arman aunque el media limpio está en `lo:5000`/`lo:5007`.
+
+### Notas
+- Robustez frente al retraso: el canal-up llega tras el `*8*3#5#4*416##` rezagado,
+  evitando el teardown prematuro. Desarme (`call.hangup`/`sip.call.ended`) y guard
+  de 5 min sin cambios **intactos**.
+- **Disparadores SIP y doorbell sin cambios:** el armado sigue respondiendo a
+  `doorbell.pressed` e `sip.call.incoming`/`sip.call.connected`, en paralelo con
+  el nuevo `media.channel.up`.
+- No-interferencia **total:** cero comandos nuevos al bus; **solo** reacción a lo que
+  el device anuncia (Fase 0 intacta). El helper `IsMediaChannelUp` es puro (sin
+  efectos secundarios).
+- **Requisito operativo:** requiere que la config del device tenga
+  `streaming.live_audio_on_call: true` (introducido en v0.23.0). **Nota crítica:**
+  `deploy-standard.sh` sube el binario pero NO la config; hay que asegurar que el
+  `config.yaml` en el device incluya el bloque `streaming:` con ese flag.
+
+## [0.23.0] - 2026-08-21
+
+### Añadido
+- **B1: oír + ver la puerta desde Home Assistant.** El audio de la puerta (capturado
+  en v0.22.0) se enruta al **relay de audio del RTSP** (`10000`) para que el stream
+  `/doorbell` lleve **vídeo + audio**, y go2rtc (que ya sirve `/doorbell` con
+  `audio=pcma`) lo publique a HA por WebRTC. **Cero decode/transcode en el bridge**
+  (el códec Speex/8000 PT110 ya casa con la pista de audio del RTSP).
+- `pkg/sip/live_audio.go` (`LiveAudioOnCall`): espejo pasivo de `LiveVideoOnCall`
+  (tap `lo:5000` → relay `10000`), armado en los mismos eventos de llamada, con el
+  **fix del leak Start/Stop** incorporado de fábrica. Sin `CallActiveMarker` (el
+  audio no dispara self-INVITE).
+- Config `streaming.live_audio_on_call` (**fail-closed**).
+
+### Notas
+- No-interferencia: tap AF_PACKET **pasivo** en `lo` (como el de vídeo); alimentar
+  `10000` es escribir al relay del propio bridge, no al device nativo. go2rtc no se
+  toca. Coexiste con el tap de validación WAV de v0.22.0 (`5000→11000`) sin conflicto.
+- **Requisito operativo:** el `5000` solo emite con parte de red + audio 2-vías
+  activo en la llamada (heredado de v0.22.0).
+- **Validación en vivo PENDIENTE (2026-08-22):** el código está review-clean (mirror
+  mecánico del tap de vídeo ya en producción; puertos 5000→10000 verificados; go2rtc
+  ya sirve `/doorbell` con audio) y las piezas están validadas por separado (captura
+  del audio en v0.22.0), pero la confirmación end-to-end "se oye en HA vía go2rtc"
+  quedó pendiente por indisponibilidad de la app en el momento del merge. A confirmar:
+  (a) que el tap arma durante una llamada real (que disparen `doorbell.pressed`/
+  `sip.call.*`), (b) que HA reproduce el audio junto al vídeo.
+
+## [0.22.0] - 2026-08-21
+
+### Añadido
+- **"Oír" la puerta vía tap pasivo de `lo:5000`** (corrige la recepción que v0.21.0
+  no lograba). El reversing on-device mostró que el audio Speex de bajada de la
+  puerta sale **EN CLARO por el puerto de loopback `5000`** (RTP PT=110), análogo
+  al vídeo en `5007`, **solo cuando hay una parte de red en la llamada** (la app).
+- `pkg/sip/audio_tap_decode.go` (`AudioTapDecoder`): decodifica el RTP Speex **en
+  claro** (`RTP/AVP`, sin crypto) a WAV vía ffmpeg leyendo un SDP generado.
+- `pkg/sip/audio_listen_on_call.go` (`AudioListenOnCall`): arma el tap de `5000` +
+  el decoder en los **eventos de llamada** (espejo de `LiveVideoOnCall`), sin
+  auto-disparar ninguna pata. Reutiliza el `LoopbackRTPTap` genérico del vídeo.
+  Constante `NativeAudioRTPPort = 5000`.
+- Endpoints `/api/audio/listen/{start,stop,status}` (tras Basic Auth) para forzar
+  el armado en validación. Config `audio.listen_tap_enabled` (fail-closed) +
+  `audio.listen_sink_path` (sink WAV propio, distinto del de talk-back).
+
+### Notas
+- **De-risk del disparo (Tarea 1):** la pata propia del bridge NO dispara la
+  emisión a `5000` (el self-INVITE es inestable y su audio suena en la unidad
+  interna, no en la calle). El `5000` emite con una parte de red real en la
+  llamada → el tap se arma en los eventos de llamada. Incógnita para validación:
+  ¿emite ya mientras suena, o solo al contestar en red? (necesita timbrazo físico).
+- No-interferencia: tap AF_PACKET **pasivo** en `lo` (como el de vídeo) + decode
+  RTP local en `127.0.0.1:11000`; sin sockets nuevos a puertos del device. El
+  vídeo (`5007`) no se toca. Fail-closed.
+- **Validado on-device (2026-08-21):** con la app manteniendo comunicación **con
+  el micro activo** (audio 2-vías), el tap captura el Speex de `5000`, lo reenvía a
+  `11000` y ffmpeg lo decodifica a un WAV con **audio de calle real** (200 KB/12 s,
+  mean −44.6 dB / max −6.4 dB). Requirió `-flush_packets 1` en el decoder (ffmpeg
+  bufferiza la salida; sin ese flag el WAV sale a 0 bytes al parar el decoder).
+  Requisito operativo: el `5000` solo emite con una **parte de red y audio 2-vías**
+  activos en la llamada (con solo vídeo o micro cerrado, no hay audio que capturar).
+
+## [0.21.0] - 2026-08-21
+
+### Añadido
+- **Audio full-duplex en la pata propia del bridge** (cimiento del objetivo
+  "contestar el interfono desde HA", subproyecto A): el bridge ahora puede
+  **oír** el audio Speex/SRTP de la puerta además de **hablarle**, en su propia
+  pata SIP de audio a `c300x` (arquitectura β2). Reutiliza el talk-back v2
+  (envío) y añade la recepción.
+- `pkg/sip/audio_receiver.go` (`AudioReceiver`): recibe el SRTP entrante y lo
+  vuelca a un WAV vía ffmpeg leyendo un SDP generado (`BuildInboundSDP`),
+  escuchando en el puerto LOCAL del bridge y descifrando con la clave del answer.
+- `AudioCall.OpenDuplex/Close`: sesión full-duplex con **una sola pata activa**
+  (`ErrAudioLegBusy`), auto-teardown cuando el receiver expira (reset + BYE), e
+  `IsActive()` para estado autoritativo.
+- Endpoints de validación local `POST /api/audio/duplex/start|stop`,
+  `GET /api/audio/duplex/status` (tras el Basic Auth; **nunca** exponen la clave
+  SRTP).
+- Bloque de config `audio:` (`duplex_enabled` fail-closed, `duplex_sink_path`).
+
+### Notas
+- **β2 justificada por reversing** (2026-08-21): el audio de la puerta NO viaja
+  por IP en el loopback (va por DSP/bus SCS cuando se contesta en el panel); solo
+  el vídeo se paquetiza. Para oír, el bridge debe ser parte de red (pata propia).
+  No hay vía pasiva de audio. El vídeo sigue siendo tap pasivo, intacto.
+- Plumbing P1 (dos ffmpeg, sin dependencias). Fallback P2 (`pion/srtp`) previsto.
+- **Validación on-device (2026-08-21):** funcionan el plumbing full-duplex, **hablar**
+  (talk-back v2), el cierre limpio, la **coexistencia segura** (con panel/app en la
+  llamada, `start` falla limpio sin dejar pata colgada) y el fail-closed. **El "oír" NO
+  captura todavía** con el mecanismo de esta versión (receiver en el puerto SIP → 0 bytes):
+  el reversing mostró que el audio de la puerta sale **en claro por el puerto de loopback
+  `5000`** (análogo al vídeo en `5007`), solo cuando hay una parte de red en la llamada. La
+  recepción correcta es un **tap pasivo de `5000`**, que llega en un incremento aparte. La
+  decisión P1/P2 queda obsoleta.
+- No-interferencia respetada: solo la pata SIP local + `nc` a 30006 (WHO=8); sin
+  sockets nuevos; vídeo sin tocar. Fail-closed: dúplex OFF salvo config explícita.
+
+## [0.20.0] - 2026-08-21
+
+### Añadido
+- **Clasificador de accesos → HA** (`pkg/access`): clasifica cada apertura del
+  portal como `telefonillo` (correlacionada con timbre/llamada previos dentro de
+  `correlation_window`), `llave` (sin correlación, RFID/residente) o
+  `desconocido` (señales en conflicto). La duración del pulso de cerradura ajusta
+  la confianza (`alta`/`baja`/`media`), no la etiqueta.
+- Nuevas entidades HA: entidad `event` "Acceso portal" (event_types
+  telefonillo/llave/desconocido, para automatizaciones) y sensor "Último acceso"
+  con atributos (confianza, hubo_llamada, duración, where, timestamp). Primer uso
+  de la plataforma `event` en el bridge.
+- Bloque de config `access:` (`enabled`, `correlation_window`, `max_hold_wait`,
+  `duration_visitor_max`).
+
+### Notas
+- Componente 100% pasivo: solo escucha el EventBus interno; no abre sockets ni
+  envía comandos al bus (respeta la no-interferencia).
+- La señal es a nivel de edificio (no identifica piso). `duration_s` y `had_call`
+  viajan en los atributos para validar el umbral contra el histórico de HA.
+
+## [0.19.0] - 2026-08-20
+
+### Talk-back to the DOOR panel via the answering-machine greeting (v1)
+
+Playing bridge audio out the **door station speaker** (so a visitor hears us) is
+now possible — through the device's own answering-machine greeting, the only
+path that reaches the door on this hardware. Endpoint: `POST/GET/DELETE
+/api/talkback/greeting`.
+
+- **Why not the obvious routes** (all reverse-engineered and ruled out live):
+  - *Local SIP self-call* (`/api/talkback/say`, `sip.AudioCall`): the bridge's
+    `c300x` identity is its own, so Flexisip loops the INVITE back to the bridge
+    — audio never leaves the box. (Fixed en route: the bridge's SIP realm was
+    the stale `YOUR_GATEWAY_ID…`; the live Flexisip realm is `YOUR_GATEWAY_ID.bs.iotleg.com` —
+    `configs/config.yaml` `sip.domain` corrected, which also un-breaks the video
+    self-INVITE REGISTER that had silently failed in production.)
+  - *Parallel RTP injection* into the live audio legs (`5000→4000` PT110,
+    `7078↔3606` PT98, captured with an AF_PACKET sniff): the DSP/belle-sip
+    discards the foreign SSRC — no audio, at every layer.
+  - *`bt_av_media` file play* (`*7*51*##`, plays `/var/tmp/records/audio.wav`
+    via `filesrc!wavparse!audioconvert!alsasink`): **works**, but the ZL380
+    voice-DSP topology routes playback to the **indoor** speaker (Rout), never
+    the door (Sout). Confirmed audible indoors, silent at the door.
+- **What reaches the door**: `bt_answering_machine` (a liblinphone SIP client)
+  auto-answers an unanswered door call and plays its greeting **to the bus**
+  (DSP state `EN_AUDIO_PLAY_LOC_SCS`, `GreetingBus`), via `*7*58#…#1*##`
+  (message source). Openserver + the DSP mixer apply the bus routing. Validated
+  live: with our audio as the greeting, a visitor at the panel hears it.
+- **`pkg/webserver/greeting_handlers.go`** — `POST /api/talkback/greeting`
+  (audio in the body; any format) transcodes to PCM s16le/mono/8000 with the
+  device `ffmpeg` and installs it as `/home/bticino/cfg/extra/7/messaggio.wav`
+  (+ `audio.wav`), drops a `.bridge_greeting` sentinel, and (unless
+  `?activate=false`) enables the answering machine (`*8*91##`). `GET` reports
+  state; `DELETE` removes only a bridge-set greeting (restoring the firmware
+  default), optionally deactivating the machine (`?deactivate=true`).
+- **Limitation**: one-shot greeting when the machine picks up, not live
+  interactive audio. On-demand door playback would require replaying the
+  liblinphone answer+play flow or setting DSP state 10 directly (open lead).
+
 ## [0.18.0] - 2026-08-18
 
 ### Live door video in HA during an incoming call (passive mirror)

@@ -5,7 +5,7 @@ itself** (ARM7, i.MX6) and integrates the intercom with Home Assistant (MQTT),
 Apple HomeKit, a Svelte web dashboard, a REST API and hardware-accelerated
 **RTSP video streaming**.
 
-**Version:** 0.18.0 (see `VERSION` and `CHANGELOG.md`)
+**Version:** 0.24.0 (see `VERSION` and `CHANGELOG.md`)
 **Target:** Linux ARM7 (i.MX6 inside the Classe 300X)
 
 ## Current status
@@ -29,6 +29,16 @@ Apple HomeKit, a Svelte web dashboard, a REST API and hardware-accelerated
 | Web log viewer (/logs) | ✅ Working — 500-entry ring buffer |
 | Multicast listener (:7667) | ⚠️ Implemented (port held by a native process) |
 | HomeKit (:8081) | ⚠️ Implemented, not verified |
+
+**v0.24.0** (current) — all three live-media tracks (video, audio, audio-listen) now
+arm on the native OpenWebNet **channel-up** frames (`*7*300#…#5000#`/`#5007#`), not just
+on SIP/doorbell events. This fixes the common real-world case — opening camera+mic from
+the app (or the indoor C300) is native auto-activation, **not** a SIP call — so the media
+tracks used to never arm even though cleartext media was already on `lo:5000`/`lo:5007`.
+Additive and passive (zero new bus commands). Milestones since v0.18: v0.19 talk-back to
+the door via the answering-machine greeting; v0.20 access classifier → HA (intercom/key/
+RFID); v0.21 full-duplex audio on the bridge's own leg; v0.22 "hear" the door via a
+passive `lo:5000` tap; v0.23 (B1) hear+see the door from HA. See `CHANGELOG.md`.
 
 **v0.18.0** — live video during a call via a **passive** mirror: a read-only
 AF_PACKET tap on `lo:5007` (where the firmware already streams cleartext H.264 RTP
@@ -302,5 +312,5 @@ bticino_bridge/
 ├── scripts/                           # deploy.sh, run_all_tests.sh, MQTT utilities
 ├── Makefile
 ├── CHANGELOG.md                       # Authoritative change log
-└── VERSION                            # 0.17.0
+└── VERSION                            # 0.24.0
 ```

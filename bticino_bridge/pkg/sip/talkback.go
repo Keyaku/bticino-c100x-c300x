@@ -17,7 +17,8 @@ import (
 // es RTP PLANO. El talk-back consiste en enviar RTP Speex/8000 (payload type
 // 110, el codec de audio del c300x) al puerto de recepción de audio del portero,
 // con la sesión de audio bidireccional ARMADA mediante el comando OpenWebNet
-//   *8*2#5#4*16##  (CmdAnswerPickup — "activar audio bidireccional").
+//
+//	*8*2#5#4*16##  (CmdAnswerPickup — "activar audio bidireccional").
 //
 // Este componente maneja SOLO el pipeline de media (GStreamer). El comando de
 // armado lo envía quien invoca (webserver / bridge) a través del cliente OWN.

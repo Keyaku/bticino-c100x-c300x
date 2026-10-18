@@ -1,6 +1,7 @@
 package events
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -14,11 +15,20 @@ func TestEventBus_BasicFunctionality(t *testing.T) {
 	bus := NewEventBus(1, logger)
 	defer bus.Close()
 
-	// Test basic subscribe and publish
+	// Test basic subscribe and publish. El handler corre en otra goroutine: el estado
+	// compartido con el test va protegido por mutex (si no, -race lo marca).
+	var mu sync.Mutex
 	eventReceived := false
 	var receivedData interface{}
+	snapshot := func() (bool, interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		return eventReceived, receivedData
+	}
 
 	subscriptionID := bus.Subscribe("test.event", func(event *Event) {
+		mu.Lock()
+		defer mu.Unlock()
 		eventReceived = true
 		receivedData = event.Data
 	})
@@ -29,12 +39,13 @@ func TestEventBus_BasicFunctionality(t *testing.T) {
 	// Give some time for async processing
 	time.Sleep(100 * time.Millisecond)
 
-	if !eventReceived {
+	got, data := snapshot()
+	if !got {
 		t.Error("Event was not received")
 	}
 
-	if receivedData != "test data" {
-		t.Errorf("Expected 'test data', got %v", receivedData)
+	if data != "test data" {
+		t.Errorf("Expected 'test data', got %v", data)
 	}
 
 	// Test unsubscribe
@@ -43,11 +54,13 @@ func TestEventBus_BasicFunctionality(t *testing.T) {
 	}
 
 	// Reset and publish again - should not receive
+	mu.Lock()
 	eventReceived = false
+	mu.Unlock()
 	bus.Publish("test.event", "test data 2")
 	time.Sleep(100 * time.Millisecond)
 
-	if eventReceived {
+	if got, _ := snapshot(); got {
 		t.Error("Event was received after unsubscribe")
 	}
 }
@@ -59,10 +72,14 @@ func TestEventBus_PatternMatching(t *testing.T) {
 	bus := NewEventBus(1, logger)
 	defer bus.Close()
 
+	// Los handlers pueden ejecutarse en goroutines concurrentes: append protegido por mutex.
+	var mu sync.Mutex
 	receivedEvents := make([]string, 0)
 
 	// Subscribe to pattern
 	bus.SubscribePattern("door.*", func(eventName string, event *Event) {
+		mu.Lock()
+		defer mu.Unlock()
 		receivedEvents = append(receivedEvents, eventName)
 	})
 
@@ -72,6 +89,10 @@ func TestEventBus_PatternMatching(t *testing.T) {
 	bus.Publish("window.opened", nil) // Should not match
 
 	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	receivedEvents = append([]string(nil), receivedEvents...) // copia estable para el resto del test
+	mu.Unlock()
 
 	if len(receivedEvents) != 2 {
 		t.Errorf("Expected 2 events, got %d", len(receivedEvents))

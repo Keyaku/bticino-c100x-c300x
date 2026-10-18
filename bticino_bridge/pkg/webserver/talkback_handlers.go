@@ -2,10 +2,38 @@ package webserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"bticino_bridge/pkg/bticino"
 )
+
+// audioAllowedDirs son los directorios bajo los cuales se permite un WAV para
+// /api/talkback/say. Evita lectura de fichero arbitrario (aunque la API ya va
+// tras Basic Auth): la ruta debe ser absoluta, sin `..`, y quedar dentro de
+// uno de estos árboles.
+var audioAllowedDirs = []string{"/tmp", "/home/bticino/cfg/extra"}
+
+// validateAudioFilePath valida que file sea una ruta absoluta, limpia (sin
+// traversal) y contenida en uno de los directorios permitidos.
+func validateAudioFilePath(file string) error {
+	if file == "" {
+		return fmt.Errorf("ruta vacía")
+	}
+	if !filepath.IsAbs(file) {
+		return fmt.Errorf("debe ser una ruta absoluta")
+	}
+	clean := filepath.Clean(file)
+	for _, dir := range audioAllowedDirs {
+		d := filepath.Clean(dir)
+		if clean == d || strings.HasPrefix(clean, d+string(filepath.Separator)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("fuera de los directorios permitidos (%s)", strings.Join(audioAllowedDirs, ", "))
+}
 
 // Talk-back (audio ascendente app/bridge → portero). EXPERIMENTAL.
 //
@@ -20,6 +48,7 @@ import (
 //   POST /api/talkback/start   {host?, port, source, loop?, arm?}
 //   POST /api/talkback/stop
 //   GET  /api/talkback/status
+//   POST /api/talkback/say?file=<ruta_wav>   (talk-back v2, ver audioCall/handleTalkbackSay)
 
 func (ws *WebServer) handleTalkbackStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -93,6 +122,53 @@ func (ws *WebServer) handleTalkbackStatus(w http.ResponseWriter, r *http.Request
 	ws.writeTalkbackJSON(w, http.StatusOK, map[string]interface{}{
 		"active": ws.talkback.IsActive(),
 		"target": ws.talkback.Target(),
+	})
+}
+
+// handleTalkbackSay implementa el talk-back v2: el bridge origina su propia
+// llamada de audio local a c300x (SDP real, no el dummy del self-INVITE de
+// vídeo) y reproduce el WAV indicado por el altavoz de la puerta. A
+// diferencia de /api/talkback/start (que exige conocer de antemano el
+// puerto/clave SRTP de una sesión ya viva), aquí AudioCall.Say negocia su
+// propia sesión de principio a fin (ver pkg/sip/audio_call.go).
+//
+//	POST /api/talkback/say?file=/ruta/al/audio.wav
+func (ws *WebServer) handleTalkbackSay(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if ws.audioCall == nil {
+		ws.writeTalkbackJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"success": false, "error": "talk-back v2 no disponible (SIP/OpenWebNet no inicializados)",
+		})
+		return
+	}
+
+	file := r.URL.Query().Get("file")
+	if file == "" {
+		ws.writeTalkbackJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success": false, "error": "se requiere el parámetro 'file' (ruta al WAV)",
+		})
+		return
+	}
+	if err := validateAudioFilePath(file); err != nil {
+		ws.writeTalkbackJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success": false, "error": "ruta de audio no permitida: " + err.Error(),
+		})
+		return
+	}
+
+	if err := ws.audioCall.Say(file); err != nil {
+		ws.logger.WithError(err).Warn("talkback/say: fallo al originar la llamada de audio o reproducir")
+		ws.writeTalkbackJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success": false, "error": err.Error(),
+		})
+		return
+	}
+
+	ws.writeTalkbackJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true, "file": file, "message": "talk-back v2: WAV enviado",
 	})
 }
 

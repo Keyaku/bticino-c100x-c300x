@@ -85,6 +85,14 @@ func NewEnhancedRTSPServer(port int, sipClient *BTicinoSIPClient, eventBus event
 		streams:     make(map[string]*StreamConfig),
 	}
 
+	// Pista de audio siempre viva (silencio speex PT110 si no llega audio) + entrada
+	// prioritaria para el OÍR del ojo: el ffmpeg de go2rtc no emite NADA (ni vídeo)
+	// sin un primer paquete de audio válido. Ver rtp_relay_fill.go.
+	server.rtpRelay.Audio.EnableSilenceFill(RTSPAudioPT, EyeAudioRelayPort)
+	// Vídeo nunca mudo: fondo negro H.264 a 1 fps en reposo, para que el ffmpeg de
+	// go2rtc no muera por timeout y la imagen real llegue al instante (rtp_relay_vfill.go).
+	server.rtpRelay.Video.EnableVideoFill(96)
+
 	// Configurar streams por defecto (compatibles con slyoldfox)
 	server.streams = map[string]*StreamConfig{
 		"/doorbell": {
@@ -806,13 +814,13 @@ a=framerate:7
 	}
 
 	if config.AudioEnabled {
-		sdp += fmt.Sprintf(`m=audio 0 RTP/AVP 110
+		sdp += fmt.Sprintf(`m=audio 0 RTP/AVP %[1]d
 b=AS:16
-a=rtpmap:110 speex/8000
-a=fmtp:110 vbr=on
+a=rtpmap:%[1]d speex/8000
+a=fmtp:%[1]d vbr=on
 a=control:trackID=audio
 a=maxptime:20
-`)
+`, RTSPAudioPT)
 	}
 
 	return sdp
@@ -924,8 +932,19 @@ func (r *EnhancedRTSPServer) sessionCleanup() {
 	}
 }
 
-// Aserción de compilación: el servidor RTSP satisface CallActiveMarker.
+// Aserción de compilación: el servidor RTSP satisface CallActiveMarker (setter)
+// y CallActiveChecker (getter, usado por PanelView para la guarda no-interferencia).
 var _ CallActiveMarker = (*EnhancedRTSPServer)(nil)
+var _ CallActiveChecker = (*EnhancedRTSPServer)(nil)
+
+// IsCallActive indica si hay una llamada en curso (nativa marcada por SetCallActive
+// o self-INVITE propio). Lo consulta PanelView para no originar el ojo si el
+// nativo ya ocupa los slots (no-interferencia).
+func (r *EnhancedRTSPServer) IsCallActive() bool {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	return r.callActive
+}
 
 // SetCallActive marca si hay una llamada nativa en curso. Cuando es true,
 // ensureSIPCallActive() OMITE el self-INVITE (la sesión de vídeo ya existe).

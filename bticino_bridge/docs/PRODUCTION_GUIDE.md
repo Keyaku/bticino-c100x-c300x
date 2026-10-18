@@ -90,11 +90,11 @@ ssh -i ~/.ssh/llave_broker root2@bticino
 ### **Home Assistant Commands**
 ```bash
 # Test MQTT from command line
-mosquitto_pub -h 192.168.1.3 -p 1883 -u mqtt_user -P CHANGE_ME \
+mosquitto_pub -h 192.168.1.3 -p 1883 -u ha -P CHANGE_ME \
   -t "homeassistant/sensor/bticino/commands/refresh" -m "refresh"
 
 # Monitor MQTT data
-mosquitto_sub -h 192.168.1.3 -p 1883 -u mqtt_user -P CHANGE_ME \
+mosquitto_sub -h 192.168.1.3 -p 1883 -u ha -P CHANGE_ME \
   -t "homeassistant/sensor/bticino/+/state" -v
 ```
 
@@ -213,14 +213,14 @@ echo "test" | nc -w 1 192.168.1.3 1883
 
 ### **Home Assistant Entities Missing**
 1. Check MQTT integration is enabled with auto-discovery
-2. Verify MQTT credentials: `mqtt_user` / `CHANGE_ME`
+2. Verify MQTT credentials: `ha` / `CHANGE_ME`
 3. Restart Home Assistant MQTT integration
 4. Check MQTT broker logs
 
 ### **Commands Not Working**
 ```bash
 # Test MQTT publish manually
-mosquitto_pub -h 192.168.1.3 -p 1883 -u mqtt_user -P CHANGE_ME \
+mosquitto_pub -h 192.168.1.3 -p 1883 -u ha -P CHANGE_ME \
   -t "homeassistant/sensor/bticino/commands/system/ping" -m "test"
 
 # Check BTicino logs

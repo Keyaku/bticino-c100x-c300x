@@ -25,28 +25,28 @@ var homekitPinRe = regexp.MustCompile(`^\d{8}$`)
 
 // ConfigManager gestiona la configuración del bridge con soporte para backup y hot reload
 type ConfigManager struct {
-	configPath    string
-	backupDir     string
-	maxBackups    int
-	config        *config.Config
-	configMutex   sync.RWMutex
-	history       []ConfigChange
-	historyMutex  sync.RWMutex
-	logger        *logrus.Logger
-	autoReload    bool
-	reloadChan    chan bool
+	configPath   string
+	backupDir    string
+	maxBackups   int
+	config       *config.Config
+	configMutex  sync.RWMutex
+	history      []ConfigChange
+	historyMutex sync.RWMutex
+	logger       *logrus.Logger
+	autoReload   bool
+	reloadChan   chan bool
 }
 
 // ConfigChange representa un cambio en la configuración
 type ConfigChange struct {
-	Timestamp   time.Time              `json:"timestamp"`
-	User        string                 `json:"user,omitempty"`
-	Sections    []string               `json:"sections"`
-	Changes     map[string]interface{} `json:"changes,omitempty"`
-	BackupFile  string                 `json:"backup_file"`
-	Restarted   bool                   `json:"restarted"`
-	Success     bool                   `json:"success"`
-	Error       string                 `json:"error,omitempty"`
+	Timestamp  time.Time              `json:"timestamp"`
+	User       string                 `json:"user,omitempty"`
+	Sections   []string               `json:"sections"`
+	Changes    map[string]interface{} `json:"changes,omitempty"`
+	BackupFile string                 `json:"backup_file"`
+	Restarted  bool                   `json:"restarted"`
+	Success    bool                   `json:"success"`
+	Error      string                 `json:"error,omitempty"`
 }
 
 // ConfigValidationResult representa el resultado de una validación
@@ -59,18 +59,18 @@ type ConfigValidationResult struct {
 // NewConfigManager crea un nuevo gestor de configuración
 func NewConfigManager(configPath string, logger *logrus.Logger) *ConfigManager {
 	backupDir := filepath.Join(filepath.Dir(configPath), "backups")
-	
+
 	logger.Infof("ConfigManager initialized with config path: %s", configPath)
-	
+
 	return &ConfigManager{
-		configPath:  configPath,
-		backupDir:   backupDir,
-		maxBackups:  10,
-		config:      nil,
-		history:     make([]ConfigChange, 0),
-		logger:      logger,
-		autoReload:  false,
-		reloadChan:  make(chan bool, 1),
+		configPath: configPath,
+		backupDir:  backupDir,
+		maxBackups: 10,
+		config:     nil,
+		history:    make([]ConfigChange, 0),
+		logger:     logger,
+		autoReload: false,
+		reloadChan: make(chan bool, 1),
 	}
 }
 

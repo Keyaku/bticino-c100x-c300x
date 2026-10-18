@@ -16,6 +16,11 @@ import (
 // del 2026-08-18: flujo sostenido (~205 pps) desde el ring hasta colgar.
 const NativeVideoRTPPort = 5007
 
+// NativeAudioRTPPort es el puerto loopback al que bt_av_media envía el audio
+// Speex de bajada (RTP PT=110, EN CLARO) cuando hay una parte de RED en la
+// llamada. Verificado on-device 2026-08-21 (análogo al vídeo en 5007).
+const NativeAudioRTPPort = 5000
+
 // frameSource abstrae la fuente de tramas crudas (AF_PACKET real en el device,
 // una fuente sintética en los tests).
 type frameSource interface {

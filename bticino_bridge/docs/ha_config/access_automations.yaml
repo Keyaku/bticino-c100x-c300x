@@ -1,0 +1,128 @@
+# ============================================================================
+# Home Assistant automations for the BTicino access classifier (bridge v0.20.0+)
+# ============================================================================
+# Copy the blocks you want into your automations.yaml (or paste via the HA UI
+# "Edit in YAML" of a new automation).
+#
+# Entities auto-discovered over MQTT (device "BTicino Classe 300X"):
+#   - event.bticino_acceso_portal   -> fires on every portal unlock
+#   - sensor.bticino_ultimo_acceso  -> state = last access type (for dashboards)
+#
+# The event/sensor carry these attributes:
+#   event_type : "telefonillo" | "llave" | "desconocido"
+#   confidence : "alta" | "baja" | "media"
+#   had_call   : true if a doorbell/call preceded the unlock (=> visitor)
+#   ring_source: "doorbell" | "doorbell_floor" | "sip" | "" (empty if no call)
+#   duration_s : lock-hold seconds (0 if the close event never arrived)
+#   where      : OpenWebNet WHERE of the door (e.g. "20" = main portal)
+#
+# NOTE: the signal is BUILDING-LEVEL (the bus does not identify the flat). An
+# access is any portal opening in the building, not necessarily yours.
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# 1) SECURITY: key/RFID entry while nobody is home (or at night)
+#    The headline use case: someone opened the portal with a key and there was
+#    no doorbell/call first, while the house is in "away" mode.
+# ----------------------------------------------------------------------------
+- alias: "Portal: key entry while away"
+  id: bticino_access_key_while_away
+  trigger:
+    - platform: state
+      entity_id: event.bticino_acceso_portal
+  condition:
+    - condition: template
+      value_template: "{{ trigger.to_state.attributes.event_type == 'llave' }}"
+    # Adjust to your presence setup: an input_boolean, a person/zone, or alarm state.
+    - condition: state
+      entity_id: input_boolean.modo_ausente
+      state: "on"
+  action:
+    - service: notify.mobile_app_tu_movil   # <- change to your notify service
+      data:
+        title: "🔑 Entrada con llave en el portal"
+        message: >
+          Alguien entró con llave a las
+          {{ now().strftime('%H:%M') }} y la casa está en modo ausente
+          (confianza {{ trigger.to_state.attributes.confidence }},
+          pulso {{ trigger.to_state.attributes.duration_s | round(1) }}s).
+    # Optional: also snapshot the door camera if you have it wired.
+    # - service: camera.snapshot
+    #   target: { entity_id: camera.videoportero }
+    #   data: { filename: "/config/www/last_portal_access.jpg" }
+
+
+# ----------------------------------------------------------------------------
+# 2) VISITOR: doorbell then someone opened -> it's a visit (telefonillo)
+#    E.g. turn on the entry light for a couple of minutes.
+# ----------------------------------------------------------------------------
+- alias: "Portal: visitor arrived (telefonillo)"
+  id: bticino_access_visitor
+  trigger:
+    - platform: state
+      entity_id: event.bticino_acceso_portal
+  condition:
+    - condition: template
+      value_template: "{{ trigger.to_state.attributes.event_type == 'telefonillo' }}"
+  action:
+    - service: light.turn_on
+      target: { entity_id: light.recibidor }   # <- your entry light
+    - delay: "00:02:00"
+    - service: light.turn_off
+      target: { entity_id: light.recibidor }
+
+
+# ----------------------------------------------------------------------------
+# 3) LOG EVERYTHING: notify on any classified access, with the detail.
+#    Useful while you tune thresholds — you see type, confidence and duration.
+# ----------------------------------------------------------------------------
+- alias: "Portal: log every access"
+  id: bticino_access_log_all
+  trigger:
+    - platform: state
+      entity_id: event.bticino_acceso_portal
+  action:
+    - service: notify.persistent_notification
+      data:
+        title: "Portal access"
+        message: >
+          {{ trigger.to_state.attributes.event_type | upper }}
+          ({{ trigger.to_state.attributes.confidence }})
+          {% if trigger.to_state.attributes.had_call %}
+          tras {{ trigger.to_state.attributes.ring_source }}
+          {% else %}sin llamada previa{% endif %},
+          pulso {{ trigger.to_state.attributes.duration_s | round(1) }}s,
+          puerta {{ trigger.to_state.attributes.where }}.
+
+
+# ----------------------------------------------------------------------------
+# 4) DESCONOCIDO: conflicting signals (no call but a short pulse) -> worth a look
+# ----------------------------------------------------------------------------
+- alias: "Portal: unclassified access"
+  id: bticino_access_unknown
+  trigger:
+    - platform: state
+      entity_id: event.bticino_acceso_portal
+  condition:
+    - condition: template
+      value_template: "{{ trigger.to_state.attributes.event_type == 'desconocido' }}"
+  action:
+    - service: notify.mobile_app_tu_movil   # <- change to your notify service
+      data:
+        title: "❓ Acceso al portal sin clasificar"
+        message: >
+          Señales en conflicto (sin llamada pero pulso corto,
+          {{ trigger.to_state.attributes.duration_s | round(1) }}s). Revisa la cámara.
+
+
+# ============================================================================
+# Tip: the sensor "Último acceso" (sensor.bticino_ultimo_acceso) holds the last
+# type as its state and the same fields as attributes, handy for a dashboard
+# card or a template. Example template sensor for "was the last entry a key?":
+#
+# template:
+#   - binary_sensor:
+#       - name: "Última entrada con llave"
+#         state: "{{ states('sensor.bticino_ultimo_acceso') == 'llave' }}"
+# ============================================================================

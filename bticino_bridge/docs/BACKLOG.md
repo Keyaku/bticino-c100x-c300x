@@ -18,7 +18,12 @@ spec → plan antes de implementarse.
 
 ## Otras
 
-- **Clasificador de eventos de acceso / cerradura por duración.** El bus OpenWebNet
+- **Clasificador de eventos de acceso / cerradura por duración.**
+  **✅ HECHO (v0.20.0, 2026-08-21)** — implementado con correlación timbre/llamada
+  como señal primaria (mejor que el umbral de duración original). Ver
+  `docs/internal/specs/2026-08-21-access-classifier-design.md`.
+
+  El bus OpenWebNet
   emite eventos de cerradura (apertura → cierre + duración) de **cualquier piso**
   (sin identificar el piso concreto — privacidad de edificio). Patrón empírico
   observado por el usuario:

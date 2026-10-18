@@ -27,6 +27,8 @@ type Config struct {
 	Notifications   NotificationsConfig `yaml:"notifications,omitempty"`
 	Privacy         PrivacyConfig       `yaml:"privacy,omitempty"`
 	Security        SecurityConfig      `yaml:"security,omitempty"`
+	Access          AccessConfig        `yaml:"access,omitempty"`
+	Audio           AudioConfig         `yaml:"audio,omitempty"`
 }
 
 type BridgeConfig struct {
@@ -59,6 +61,26 @@ type SIPConfig struct {
 	UseHA1      bool   `yaml:"use_ha1"`
 	InsecureTLS bool   `yaml:"insecure_tls"`
 	SIPTarget   string `yaml:"sip_target"` // INVITE target user (default: "c300x")
+
+	// Answerer: subsistema contestador SIP (F1). Fail-closed: omitido => Enabled=false.
+	Answerer AnswererConfig `yaml:"answerer,omitempty"`
+}
+
+// AnswererConfig configura el contestador SIP (el bridge como parte de red del fork del timbre).
+type AnswererConfig struct {
+	Enabled        bool   `yaml:"enabled"`          // master switch (F1), fail-closed
+	User           string `yaml:"user"`             // AOR: <user>@<sip.domain>; default "bridge"
+	AudioPort      int    `yaml:"audio_port"`       // puerto de drenaje audio; default 10100
+	VideoPort      int    `yaml:"video_port"`       // puerto de drenaje vídeo (-1 = audio-only, rechaza m=video); 0/omitido = default 10102
+	MaxCallSeconds int    `yaml:"max_call_seconds"` // guard anti-placa-ocupada; default 120
+	// RingTimeoutSeconds: guarda de timbre. Si la llamada sigue en RINGING (nadie contesta y
+	// el CANCEL de la placa no llega), se cierra con 480 al vencer. Default 70 (app 1.17.3).
+	RingTimeoutSeconds int  `yaml:"ring_timeout_seconds"`
+	TalkEnabled        bool `yaml:"talk_enabled"` // F2 (hablar desde HA): lanza el TalkSender; fail-closed
+	// TalkKeepalive: subida de audio continua (silencio speex cuando el micro de HA calla) para
+	// que la placa abra el audio de bajada (hipótesis RTP simétrico). Requiere TalkEnabled. Fail-closed.
+	TalkKeepalive bool   `yaml:"talk_keepalive"`
+	RouteFile     string `yaml:"route_file"` // ruta de route_ext.conf para el route-check; default abajo
 }
 
 type MQTTConfig struct {
@@ -183,6 +205,25 @@ type StreamingConfig struct {
 	// lo:5007 → relay). CERO comandos al bus: es aún más seguro que el snapshot
 	// cooperativo. Independiente de VideoOnDemand.
 	LiveOnCall bool `yaml:"live_on_call"`
+	// LiveAudioOnCall habilita el audio en vivo de la puerta durante una
+	// llamada, mediante el mismo espejo PASIVO que LiveOnCall pero del leg de
+	// audio nativo (lo:5000 → relay 10000, sin CallActiveMarker: el audio no
+	// dispara self-INVITE). Fail-closed: a diferencia de LiveOnCall (vídeo,
+	// probado en producción), es una feature nueva — NO se defaultea a true
+	// ni aquí ni en GetStreamingConfig(); requiere el campo explícito en el
+	// YAML (sdd 2026-08-21-b1-audio-to-ha).
+	LiveAudioOnCall bool `yaml:"live_audio_on_call"`
+	// PanelView configura "Ver placa" (ojo/autoaccensione a demanda). Fail-closed.
+	PanelView PanelViewConfig `yaml:"panelview,omitempty"`
+}
+
+// PanelViewConfig configura "Ver placa" (ojo/autoaccensione a demanda). Fail-closed.
+type PanelViewConfig struct {
+	Enabled        bool   `yaml:"enabled"`         // si false, el subsistema no se instancia
+	DEVADDR        string `yaml:"devaddr"`         // dirección OWN de la placa; vacío ⇒ no dispara
+	TimeoutSeconds int    `yaml:"timeout_seconds"` // auto-off (default 30)
+	CallerUser     string `yaml:"caller_user"`     // identidad From del INVITE (default "webrtc")
+	SendWho8Arm    bool   `yaml:"send_who8_arm"`   // enviar *8*2#5#4*16## tras el ACK (default false)
 }
 
 // Backends de vídeo soportados
@@ -330,6 +371,34 @@ type SecurityConfig struct {
 	ConfigAuditLog  bool   `yaml:"config_audit_log"`
 }
 
+// AccessConfig configura el clasificador de accesos (apertura de portal →
+// telefonillo/llave). Solo escucha el EventBus; no envía nada al bus.
+type AccessConfig struct {
+	Enabled            bool          `yaml:"enabled"`
+	CorrelationWindow  time.Duration `yaml:"correlation_window"`   // apertura ≤ esto tras timbre/llamada → telefonillo
+	MaxHoldWait        time.Duration `yaml:"max_hold_wait"`        // espera al cierre para medir la duración del pulso
+	DurationVisitorMax time.Duration `yaml:"duration_visitor_max"` // umbral de confianza por duración
+}
+
+// AudioConfig gobierna el audio full-duplex de la pata propia del bridge.
+type AudioConfig struct {
+	DuplexEnabled  bool   `yaml:"duplex_enabled"`   // fail-closed: NO auto-default
+	DuplexSinkPath string `yaml:"duplex_sink_path"` // sink WAV para validación local
+
+	// ListenTapEnabled arma el espejo pasivo del audio de bajada nativo (tap
+	// lo:5000, sdd 2026-08-21-audio-tap-5000). Fail-closed: NO auto-default,
+	// igual que DuplexEnabled — si se omite el campo en el YAML queda false.
+	ListenTapEnabled bool `yaml:"listen_tap_enabled"`
+
+	// ListenSinkPath es el sink WAV DEDICADO del oído pasivo (tap lo:5000).
+	// Distinto de DuplexSinkPath (door_audio.wav) para no compartir archivo
+	// con la pata duplex, que sigue cableada en paralelo (revisión final de
+	// rama feat/audio-tap-5000, hallazgo 2): escribir ambos al mismo WAV
+	// haría que uno pisara al otro si llegan a coincidir en el tiempo. Con
+	// auto-default si se omite (no fail-closed, como DuplexSinkPath).
+	ListenSinkPath string `yaml:"listen_sink_path"`
+}
+
 // LoadConfig loads configuration from YAML file
 func LoadConfig(configPath string) (*Config, error) {
 	config := &Config{}
@@ -355,8 +424,51 @@ func LoadConfig(configPath string) (*Config, error) {
 	if config.Streaming.RTSPPort == 0 {
 		config.Streaming.RTSPPort = 6554
 	}
+	// PanelView: solo defaults de timeout y caller; Enabled y DEVADDR quedan
+	// vacíos/false (fail-closed).
+	if config.Streaming.PanelView.TimeoutSeconds == 0 {
+		config.Streaming.PanelView.TimeoutSeconds = 30
+	}
+	if config.Streaming.PanelView.CallerUser == "" {
+		config.Streaming.PanelView.CallerUser = "webrtc"
+	}
 	if config.MQTT.ClientID == "" {
 		config.MQTT.ClientID = "bticino_bridge"
+	}
+	if config.Access.CorrelationWindow == 0 {
+		config.Access.CorrelationWindow = 30 * time.Second
+	}
+	if config.Access.MaxHoldWait == 0 {
+		config.Access.MaxHoldWait = 8 * time.Second
+	}
+	if config.Access.DurationVisitorMax == 0 {
+		config.Access.DurationVisitorMax = 3500 * time.Millisecond
+	}
+	if config.Audio.DuplexSinkPath == "" {
+		config.Audio.DuplexSinkPath = "/home/bticino/cfg/extra/recordings/door_audio.wav"
+	}
+	if config.Audio.ListenSinkPath == "" {
+		config.Audio.ListenSinkPath = "/home/bticino/cfg/extra/recordings/door_audio_listen.wav"
+	}
+
+	// Defaults del answerer (no fuerzan Enabled; solo rellenan campos a cero).
+	if config.SIP.Answerer.User == "" {
+		config.SIP.Answerer.User = "bridge"
+	}
+	if config.SIP.Answerer.AudioPort == 0 {
+		config.SIP.Answerer.AudioPort = 10100
+	}
+	if config.SIP.Answerer.VideoPort == 0 {
+		config.SIP.Answerer.VideoPort = 10102
+	}
+	if config.SIP.Answerer.MaxCallSeconds == 0 {
+		config.SIP.Answerer.MaxCallSeconds = 120
+	}
+	if config.SIP.Answerer.RingTimeoutSeconds == 0 {
+		config.SIP.Answerer.RingTimeoutSeconds = 70
+	}
+	if config.SIP.Answerer.RouteFile == "" {
+		config.SIP.Answerer.RouteFile = "/etc/flexisip/users/route_ext.conf"
 	}
 
 	return config, nil

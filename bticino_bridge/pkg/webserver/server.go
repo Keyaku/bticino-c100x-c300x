@@ -147,6 +147,25 @@ type CallController interface {
 	Hangup() error // send BYE to end the active call
 }
 
+// Answerer expone el control del contestador SIP (F1) al API web. Opcional
+// (nil si el subsistema SIP answerer no está activo). Nombre local en
+// webserver; la satisface *sip.Answerer de forma estructural (sin import de
+// pkg/sip aquí, para poder inyectar un fake en tests).
+type Answerer interface {
+	Answer() error
+	Hangup() error
+	StateString() string
+	IsRegistered() bool
+}
+
+// AudioSayer es la interfaz mínima que necesita el endpoint de talk-back
+// (POST /api/talkback/say) — la implementa *sip.AudioCall (Task 7/8). Se
+// define aquí (en vez de acoplar directamente al tipo concreto) para poder
+// inyectar un stub en tests del webserver sin importar pkg/sip.
+type AudioSayer interface {
+	Say(wavPath string) error
+}
+
 // VideoProbeFunc runs a single cooperative video probe (one *7*300, no retry,
 // no self-INVITE). Returns a diagnostic report and, if any, the best JPEG frame.
 type VideoProbeFunc func() (report map[string]interface{}, jpeg []byte, err error)
@@ -157,28 +176,32 @@ type AudioProbeFunc func() (report map[string]interface{}, err error)
 
 // WebServer provides HTTP interface for BTicino bridge management
 type WebServer struct {
-	config             *config.Config
-	bridge             BTicinoBridge
-	logger             *logrus.Logger
-	server             *http.Server
-	staticDir          string
-	messageParser      *messageparser.MessageParser
-	mqttPublisher      MQTTPublisher        // Optional MQTT publishing function
-	mqttStatusProvider MQTTStatusProvider   // Optional MQTT status provider
-	ledStatusFunc      LEDStatusFunc        // Optional LED status reader
-	snapshotFunc       SnapshotFunc         // Optional camera JPEG snapshot provider
-	callController     CallController       // Optional SIP call control
-	videoProbeFunc     VideoProbeFunc       // Optional one-shot cooperative video probe
-	audioProbeFunc     AudioProbeFunc       // Optional one-shot cooperative audio probe
-	logBuffer          *LogBuffer           // Ring buffer for web log viewer
-	startTime          time.Time            // Track when server started for real uptime
-	configManager      *ConfigManager       // Configuration manager for web-based config
-	configPath         string               // Path to configuration file
-	sseClients         map[chan []byte]bool // SSE clients for real-time updates
-	sseMu              sync.Mutex
-	talkback           *sip.TalkbackInjector // Talk-back (upstream audio) injector — experimental
-	restartBridgeFunc  func()                // Acción de reinicio del bridge (inyectable en tests)
-	rebootDeviceFunc   func()                // Acción de reboot del device (inyectable en tests)
+	config                *config.Config
+	bridge                BTicinoBridge
+	logger                *logrus.Logger
+	server                *http.Server
+	staticDir             string
+	messageParser         *messageparser.MessageParser
+	mqttPublisher         MQTTPublisher        // Optional MQTT publishing function
+	mqttStatusProvider    MQTTStatusProvider   // Optional MQTT status provider
+	ledStatusFunc         LEDStatusFunc        // Optional LED status reader
+	snapshotFunc          SnapshotFunc         // Optional camera JPEG snapshot provider
+	callController        CallController       // Optional SIP call control
+	videoProbeFunc        VideoProbeFunc       // Optional one-shot cooperative video probe
+	audioProbeFunc        AudioProbeFunc       // Optional one-shot cooperative audio probe
+	logBuffer             *LogBuffer           // Ring buffer for web log viewer
+	startTime             time.Time            // Track when server started for real uptime
+	configManager         *ConfigManager       // Configuration manager for web-based config
+	configPath            string               // Path to configuration file
+	sseClients            map[chan []byte]bool // SSE clients for real-time updates
+	sseMu                 sync.Mutex
+	talkback              *sip.TalkbackInjector // Talk-back (upstream audio) injector — experimental
+	audioCall             AudioSayer            // Talk-back v2: llamada de audio local propia (Task 7/8)
+	restartBridgeFunc     func()                // Acción de reinicio del bridge (inyectable en tests)
+	rebootDeviceFunc      func()                // Acción de reboot del device (inyectable en tests)
+	duplexController      DuplexController      // Audio full-duplex de validación local (sdd 2026-08-21); IsActive() es autoritativo para /status
+	audioListenController AudioListenController // Oído pasivo (tap lo:5000, sdd 2026-08-21-audio-tap-5000); IsActive() es autoritativo para /status
+	answerer              Answerer              // Contestador SIP (F1, sdd 2026-08-23-sip-answerer-f1); opcional
 }
 
 // NewWebServer creates a new web server instance
@@ -238,6 +261,16 @@ func (ws *WebServer) SetCallController(cc CallController) {
 	ws.callController = cc
 }
 
+// SetAnswerer sets the SIP answerer (F1) controller.
+func (ws *WebServer) SetAnswerer(a Answerer) {
+	ws.answerer = a
+}
+
+// SetAudioCall sets the talk-back v2 audio call (POST /api/talkback/say).
+func (ws *WebServer) SetAudioCall(ac AudioSayer) {
+	ws.audioCall = ac
+}
+
 // SetVideoProbeFunc sets the one-shot cooperative video probe
 func (ws *WebServer) SetVideoProbeFunc(fn VideoProbeFunc) {
 	ws.videoProbeFunc = fn
@@ -275,6 +308,12 @@ func (ws *WebServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/snapshot", ws.handleAPISnapshot)
 	mux.HandleFunc("/api/call", ws.handleAPICallState)
 	mux.HandleFunc("/api/controls/call/hangup", ws.handleCallHangup)
+	// Contestador SIP (F1, sdd 2026-08-23-sip-answerer-f1). 503 si el
+	// subsistema no está activo (answerer == nil); Basic Auth heredado del
+	// authMiddleware(mux) global.
+	mux.HandleFunc("/api/doorcall/answer", ws.handleDoorcallAnswer)
+	mux.HandleFunc("/api/doorcall/hangup", ws.handleDoorcallHangup)
+	mux.HandleFunc("/api/doorcall/status", ws.handleDoorcallStatus)
 	mux.HandleFunc("/api/video/probe", ws.handleVideoProbe)
 	mux.HandleFunc("/api/audio/probe", ws.handleAudioProbe)
 	mux.HandleFunc("/api/messages", ws.handleAPIMessages)
@@ -296,6 +335,22 @@ func (ws *WebServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/talkback/start", ws.handleTalkbackStart)
 	mux.HandleFunc("/api/talkback/stop", ws.handleTalkbackStop)
 	mux.HandleFunc("/api/talkback/status", ws.handleTalkbackStatus)
+	mux.HandleFunc("/api/talkback/say", ws.handleTalkbackSay)
+	mux.HandleFunc("/api/talkback/greeting", ws.handleGreeting) // talk-back v1: saludo del contestador → puerta
+
+	// Audio full-duplex de validación local (sdd 2026-08-21-duplex-door-audio).
+	// Gateado por audio.duplex_enabled (404 si off, ver audio_duplex_handlers.go).
+	mux.HandleFunc("/api/audio/duplex/start", ws.handleAudioDuplexStart)
+	mux.HandleFunc("/api/audio/duplex/stop", ws.handleAudioDuplexStop)
+	mux.HandleFunc("/api/audio/duplex/status", ws.handleAudioDuplexStatus)
+
+	// Oído pasivo del portero: espejo del leg de audio nativo (tap lo:5000,
+	// sdd 2026-08-21-audio-tap-5000). Gateado por audio.listen_tap_enabled
+	// (404 si off, ver audio_listen_handlers.go). Vía de validación local; el
+	// armado en producción es por eventos del bus, cableado en cmd/main.go.
+	mux.HandleFunc("/api/audio/listen/start", ws.handleAudioListenStart)
+	mux.HandleFunc("/api/audio/listen/stop", ws.handleAudioListenStop)
+	mux.HandleFunc("/api/audio/listen/status", ws.handleAudioListenStatus)
 
 	// Enhanced Message Management API Routes
 	mux.HandleFunc("/api/messages/list", ws.handleAPIMessagesList)
@@ -723,6 +778,54 @@ func (ws *WebServer) handleCallHangup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.writeJSON(w, map[string]interface{}{"success": true, "action": "hangup"})
+}
+
+// handleDoorcallAnswer descuelga la llamada entrante vía el contestador SIP
+// (F1). 503 si el subsistema no está activo; 409 si el answerer rechaza la
+// acción (p.ej. ErrNotRinging: no hay llamada en RINGING).
+func (ws *WebServer) handleDoorcallAnswer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if ws.answerer == nil {
+		http.Error(w, "contestador no activo", http.StatusServiceUnavailable)
+		return
+	}
+	if err := ws.answerer.Answer(); err != nil {
+		http.Error(w, fmt.Sprintf("answer: %v", err), http.StatusConflict)
+		return
+	}
+	ws.writeJSON(w, map[string]interface{}{"success": true, "action": "answer", "state": ws.answerer.StateString()})
+}
+
+// handleDoorcallHangup cuelga la llamada en curso del contestador SIP (F1).
+// 503 si el subsistema no está activo; 409 si el answerer rechaza la acción
+// (p.ej. ErrNotInCall: no hay llamada activa).
+func (ws *WebServer) handleDoorcallHangup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if ws.answerer == nil {
+		http.Error(w, "contestador no activo", http.StatusServiceUnavailable)
+		return
+	}
+	if err := ws.answerer.Hangup(); err != nil {
+		http.Error(w, fmt.Sprintf("hangup: %v", err), http.StatusConflict)
+		return
+	}
+	ws.writeJSON(w, map[string]interface{}{"success": true, "action": "hangup", "state": ws.answerer.StateString()})
+}
+
+// handleDoorcallStatus reporta el estado actual del contestador SIP (F1).
+// 503 si el subsistema no está activo.
+func (ws *WebServer) handleDoorcallStatus(w http.ResponseWriter, r *http.Request) {
+	if ws.answerer == nil {
+		http.Error(w, "contestador no activo", http.StatusServiceUnavailable)
+		return
+	}
+	ws.writeJSON(w, map[string]interface{}{"state": ws.answerer.StateString(), "registered": ws.answerer.IsRegistered()})
 }
 
 // @Summary Get system information
@@ -1186,7 +1289,6 @@ func (ws *WebServer) handleJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript")
 	w.Write([]byte(ws.injectVersion(ws.getJS())))
 }
-
 
 func (ws *WebServer) writeJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")

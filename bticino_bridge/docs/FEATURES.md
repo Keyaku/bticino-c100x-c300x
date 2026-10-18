@@ -1,6 +1,6 @@
 # BTicino Bridge - Features and Architecture
 
-**Version**: 0.18.0
+**Version**: 0.24.0
 **Language**: Go 1.24 + Svelte 4
 **Target**: Linux ARM7 (NXP i.MX6ULL, BTicino Classe 300X)
 
@@ -606,9 +606,11 @@ slyoldfox is a Node.js/TypeScript project with similar goals. Key differences:
 | Language | Go | TypeScript/Node.js |
 | Binary | Single static binary (~15MB) | Node.js runtime + dependencies |
 | HomeKit | Native Go (brutella/hap) | hap-nodejs |
-| MQTT | Paho with 39+ HA entities | Basic MQTT |
+| MQTT | Paho with 42+ HA entities | Basic MQTT |
 | Web UI | Svelte SPA with SSE | Minimal |
 | Video | Direct GStreamer + RTSP server | ffmpeg/scrcpy-based |
+| Live door media → HA (v0.22–v0.24) | Passive `lo:5000`/`lo:5007` taps (audio Speex + video H.264, cleartext) → RTSP → go2rtc → HA; arm on native channel-up | Not implemented |
+| Access classifier → HA (v0.20) | Intercom / key / RFID open events as HA `event` entity | Not implemented |
 | OWN commands | 158+ definitions, 4-level safety | Focused set |
 | Config | Hot-reloadable YAML with backup | JSON config |
 | Answering machine | Full management (list/play/delete) | Not implemented |
