@@ -286,8 +286,7 @@ primer ojo iba perfecto (30 s completos), pero el segundo daba timeout.
 ### Notas
 - **Objetivo norte cubierto en código:** oír + ver + **hablar** desde HA
   durante una llamada, sin la app, queda implementado de punta a punta con
-  esta pieza (ver `docs/internal/specs/2026-08-22-sip-answerer-design.md`
-  y la nota de memoria `internal-note`). **Pendiente el gate en
+  esta pieza. **Pendiente el gate en
   vivo** (contestar desde HA + pulsar el micro de la tarjeta WebRTC +
   confirmar que se oye por la placa) — no se ha validado contra el device
   real todavía; ver `docs/answerer-setup.md` §Hablar (F2).
