@@ -1,0 +1,50 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          firewall-bticino
+# Required-Start:    $network
+# Required-Stop:     
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: BTicino Bridge Firewall
+# Description:       Opens ports for bticino-bridge services
+### END INIT INFO
+
+RULES_DIR=/home/bticino/cfg/extra
+RULES_FILE=$RULES_DIR/iptables.rules
+
+start_firewall() {
+    echo "Starting BTicino Bridge Firewall..."
+    
+    if [ -f "$RULES_FILE" ]; then
+        /usr/sbin/iptables-restore < $RULES_FILE 2>/dev/null
+        echo "Firewall rules restored from $RULES_FILE"
+    else
+        # Default rules if file doesn't exist
+        /usr/sbin/iptables -I INPUT -p tcp --dport 8082 -j ACCEPT
+        /usr/sbin/iptables -I INPUT -p tcp --dport 8081 -j ACCEPT
+        echo "Default firewall rules applied"
+    fi
+}
+
+stop_firewall() {
+    echo "Stopping Firewall (not implemented - security risk)"
+}
+
+case "$1" in
+    start)
+        start_firewall
+        ;;
+    stop)
+        stop_firewall
+        ;;
+    restart)
+        $0 stop
+        $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit 0

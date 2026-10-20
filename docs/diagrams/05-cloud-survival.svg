@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" width="960" height="440" role="img" aria-labelledby="t d">
+  <title id="t">Cloud-survival mode</title>
+  <desc id="d">Optional and reversible. Over-the-air updates and cloud-dependent paths are cut or redirected so a vendor update cannot silently undo your changes. The local bus, the bridge, and Home Assistant keep working. The trade-off is no vendor OTA and that cloud-only app features may stop.</desc>
+  <style>
+    .bg{fill:#0f1720}
+    .box{fill:#1b2a3a;stroke:#4aa3ff;stroke-width:2}
+    .cut{fill:#2a1517;stroke:#f85149;stroke-width:2}
+    .keep{fill:#132235;stroke:#3fb950;stroke-width:2}
+    .t{fill:#e6edf3;font-family:sans-serif;font-size:15px;text-anchor:middle}
+    .s{fill:#8b98a5;font-family:sans-serif;font-size:12px;text-anchor:middle}
+    .h{fill:#e6edf3;font-family:sans-serif;font-size:15px;font-weight:bold;text-anchor:middle}
+    .ln{stroke:#8b98a5;stroke-width:2;fill:none;marker-end:url(#a)}
+    .cutln{stroke:#f85149;stroke-width:2;fill:none}
+    .cap{fill:#cdd7e0;font-family:sans-serif;font-size:13px;text-anchor:middle}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b98a5"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="960" height="440"/>
+  <text class="cap" x="480" y="30">Optional and reversible: keep your changes, keep the device local</text>
+
+  <rect class="box" x="360" y="60" width="240" height="56" rx="8"/>
+  <text class="h" x="480" y="85">Device</text>
+  <text class="s" x="480" y="105">your rooted image</text>
+
+  <text class="h" x="230" y="170">Cut / redirected</text>
+  <rect class="cut" x="80" y="190" width="300" height="50" rx="8"/>
+  <text class="t" x="230" y="220">BTicino cloud endpoints</text>
+  <rect class="cut" x="80" y="256" width="300" height="50" rx="8"/>
+  <text class="t" x="230" y="286">over-the-air (OTA) updates</text>
+  <rect class="cut" x="80" y="322" width="300" height="50" rx="8"/>
+  <text class="t" x="230" y="352">silent vendor re-provisioning</text>
+
+  <text class="h" x="730" y="170">Keeps working</text>
+  <rect class="keep" x="580" y="190" width="300" height="50" rx="8"/>
+  <text class="t" x="730" y="220">local OpenWebNet bus</text>
+  <rect class="keep" x="580" y="256" width="300" height="50" rx="8"/>
+  <text class="t" x="730" y="286">the bridge + Home Assistant</text>
+  <rect class="keep" x="580" y="322" width="300" height="50" rx="8"/>
+  <text class="t" x="730" y="352">door, video, audio locally</text>
+
+  <path class="cutln" d="M420,116 L300,188"/>
+  <line class="cutln" x1="345" y1="138" x2="375" y2="166"/>
+  <path class="ln" d="M540,116 L660,188"/>
+
+  <text class="s" x="480" y="410">Reversible: undo it to let the vendor path back in.</text>
+</svg>

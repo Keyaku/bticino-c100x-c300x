@@ -1,0 +1,12 @@
+# Known-good SHA-256 of official BTicino firmware images.
+#
+# The repository never ships firmware. These are checksums so you can verify
+# an image you obtained yourself before building a rooted version from it.
+# Verify with:   sha256sum -c known-good.sha256   (run it next to your .fwz)
+#
+# Active, supported (Classe 300X):
+d0c42410254a9dfa4f18d2f8a94b2cbd7c99a393ac78334463d1ec4d3320f517  c300x_1.7.17.fwz
+6366019e04382a8fee884815f2534a91293134ce7978ed12d12b75968e9282c1  c300x_1.7.19.fwz
+#
+# Roadmap (Classe 100X — not yet a supported build target, listed for reference):
+# 87a61e4444cf1656fd63eace6ad0044d53224851321fbabb60b1014e1e285a8f  c100x_1.5.1.fwz

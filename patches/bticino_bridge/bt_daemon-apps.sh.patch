@@ -1,0 +1,51 @@
+#!/bin/bash
+# PATCH: bt_daemon-apps.sh
+# This patch adds bticino_bridge autostart to bt_daemon-apps.sh
+# 
+# ORIGINAL FILE: /etc/init.d/bt_daemon-apps.sh
+# LOCATION IN FIRMWARE: /etc/init.d/bt_daemon-apps.sh
+#
+# This patch adds the following code after 'bin/bt_daemon &' in the start() function:
+#
+#     # Start bticino_bridge if autostart flag exists
+#     sleep 10
+#     if [ -f /home/bticino/cfg/extra/.bridge_autostart ]; then
+#         cd /home/bticino/cfg/extra
+#         ./bticino-bridge -config=/home/bticino/cfg/extra/configs/config.yaml >> /tmp/bticino-bridge.log 2>&1 &
+#         echo "BTicino Bridge started"
+#     fi
+#
+# ADD THIS CODE BLOCK RIGHT AFTER:
+#     cd /home/bticino
+#     bin/bt_daemon &
+#     <-- ADD HERE
+
+# PATCH TO APPLY:
+# After the line "bin/bt_daemon &" in the start() function,
+# add the following lines:
+
+PATCH_CODE='
+    sleep 10
+    if [ -f /home/bticino/cfg/extra/.bridge_autostart ]; then
+        cd /home/bticino/cfg/extra
+        ./bticino-bridge -config=/home/bticino/cfg/extra/configs/config.yaml >> /tmp/bticino-bridge.log 2>&1 &
+        echo "BTicino Bridge started"
+    fi
+'
+
+# The full patched start() function should look like:
+# start() {
+#     export LD_LIBRARY_PATH=${USER_LIBDIR}:/home/bticino/lib:/home/bticino/libcoso
+#     /bin/bt_hosts.sh add localhost 127.0.0.1
+#     /bin/bt_hosts.sh add openserver 127.0.0.1
+#     /bin/bt_hosts.sh add broker-box 192.168.1.2
+#     cd /home/bticino
+#     bin/bt_daemon &
+#
+#     sleep 10
+#     if [ -f /home/bticino/cfg/extra/.bridge_autostart ]; then
+#         cd /home/bticino/cfg/extra
+#         ./bticino-bridge -config=/home/bticino/cfg/extra/configs/config.yaml >> /tmp/bticino-bridge.log 2>&1 &
+#         echo "BTicino Bridge started"
+#     fi
+# }

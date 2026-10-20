@@ -61,6 +61,8 @@ type RTPRelay struct {
 	stopCh    chan struct{}
 	udpSender *net.UDPConn // reusable socket for sending UDP to consumers
 	startTime time.Time
+	fill      *relayFill // modo "pista de audio siempre viva" (ver rtp_relay_fill.go)
+	vfill     *videoFill // modo "vídeo nunca mudo" (ver rtp_relay_vfill.go)
 }
 
 // NewRTPRelay creates a new relay for the given media type and port.
@@ -105,6 +107,20 @@ func (r *RTPRelay) Start() error {
 	r.startTime = time.Now()
 	r.stopCh = make(chan struct{})
 
+	if r.fill != nil {
+		if err := r.startFill(); err != nil {
+			conn.Close()
+			r.udpSender.Close()
+			atomic.StoreInt32(&r.running, 0)
+			return fmt.Errorf("failed to start silence fill for %s relay: %w", r.name, err)
+		}
+	}
+
+	if r.vfill != nil {
+		r.vfill.start = time.Now()
+		go r.vfillTickLoop()
+	}
+
 	go r.readLoop()
 
 	r.logger.Infof("RTP relay '%s' started on UDP :%d", r.name, r.port)
@@ -118,6 +134,7 @@ func (r *RTPRelay) Stop() {
 	}
 
 	close(r.stopCh)
+	r.stopFill()
 
 	if r.conn != nil {
 		r.conn.Close()
@@ -230,6 +247,14 @@ func (r *RTPRelay) readLoop() {
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
 
+		if r.fill != nil {
+			r.fillMain(packet)
+			continue
+		}
+		if r.vfill != nil {
+			r.vfillMain(packet)
+			continue
+		}
 		r.fanOut(packet)
 	}
 }

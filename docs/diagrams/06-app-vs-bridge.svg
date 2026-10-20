@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 560" width="1120" height="560" role="img" aria-labelledby="t d">
+  <title id="t">App versus bridge: what the bridge replaces</title>
+  <desc id="d">The official Door Entry app works in two planes. Its local plane (open the lock, stair light, answering machine, video and audio calls, view the panel) is replaced one-to-one by the bridge and Home Assistant, which also add RTSP, JPEG snapshots, an access classifier, HomeKit and message access. Three things still rely on the cloud: the one-time account and SIP-certificate provisioning, the doorbell push when you are away, and remote access from outside the LAN. The last two are covered instead by Home Assistant.</desc>
+  <style>
+    .bg{fill:#0f1720}
+    .box{fill:#1b2a3a;stroke:#4aa3ff;stroke-width:2}
+    .native{fill:#221b2f;stroke:#a371f7;stroke-width:2}
+    .ha{fill:#132235;stroke:#3fb950;stroke-width:2}
+    .warn{fill:#2a2213;stroke:#d29922;stroke-width:2;stroke-dasharray:6 4}
+    .t{fill:#e6edf3;font-family:sans-serif;font-size:14px;text-anchor:middle}
+    .l{fill:#cdd7e0;font-family:sans-serif;font-size:13px;text-anchor:start}
+    .code{fill:#9fe0b0;font-family:monospace;font-size:12px;text-anchor:start}
+    .s{fill:#8b98a5;font-family:sans-serif;font-size:12px;text-anchor:middle}
+    .h{fill:#e6edf3;font-family:sans-serif;font-size:15px;font-weight:bold;text-anchor:middle}
+    .cap{fill:#cdd7e0;font-family:sans-serif;font-size:13px;text-anchor:middle}
+    .ln{stroke:#8b98a5;stroke-width:2.5;fill:none;marker-end:url(#a)}
+    .ok{fill:#3fb950;font-family:sans-serif;font-size:12px;text-anchor:middle}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b98a5"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1120" height="560"/>
+  <text class="cap" x="560" y="28">The official app runs in two planes. The bridge replaces the local one; Home Assistant covers two of the three cloud leftovers.</text>
+
+  <!-- ===== Official app column ===== -->
+  <text class="h" x="250" y="62">Official Door Entry app</text>
+
+  <!-- Cloud plane -->
+  <rect class="native" x="40" y="78" width="420" height="150" rx="8"/>
+  <text class="t" x="250" y="100">Cloud plane — myhomeweb / iotleg</text>
+  <text class="l" x="60" y="124">• Account, login, password reset</text>
+  <text class="l" x="60" y="146">• SIP account + client TLS cert signing</text>
+  <text class="l" x="60" y="168">• Plant config (the device WHERE addresses)</text>
+  <text class="l" x="60" y="190">• Doorbell push when the app is closed (FCM)</text>
+  <text class="l" x="60" y="212">• Remote access from outside the LAN</text>
+
+  <!-- Local plane -->
+  <rect class="box" x="40" y="246" width="420" height="190" rx="8"/>
+  <text class="t" x="250" y="268">Local plane — OpenWebNet over SIP chat</text>
+  <text class="l" x="60" y="292">• Open lock / actuator</text>
+  <text class="code" x="300" y="292">*8*19/20*w##</text>
+  <text class="l" x="60" y="314">• Stair light</text>
+  <text class="code" x="300" y="314">*8*21/22*w##</text>
+  <text class="l" x="60" y="336">• Answering machine (list / play / delete)</text>
+  <text class="l" x="60" y="358">• Video + audio call (SIP / SRTP, recv-only)</text>
+  <text class="l" x="60" y="380">• View the panel without answering</text>
+  <text class="code" x="300" y="402">DEVADDR, TVCC=1</text>
+  <text class="s" x="250" y="424">The phone never sends a camera; control is WHO=8 frames</text>
+
+  <!-- ===== arrow ===== -->
+  <path class="ln" d="M470,330 L650,330"/>
+  <text class="ok" x="560" y="318">replaced 1:1</text>
+
+  <!-- ===== Bridge column ===== -->
+  <text class="h" x="865" y="62">bticino_bridge + Home Assistant</text>
+  <rect class="ha" x="660" y="78" width="420" height="358" rx="8"/>
+  <text class="t" x="870" y="100">Runs on the device, 100% local</text>
+  <text class="l" x="680" y="124">• Open lock / stair light</text>
+  <text class="code" x="900" y="124">nc 0 30006</text>
+  <text class="l" x="680" y="146">• Answering machine + voice/text memos</text>
+  <text class="l" x="680" y="168">• Video + audio of the call to Home Assistant</text>
+  <text class="l" x="680" y="190">• View the panel (PanelView, DEVADDR)</text>
+  <text class="l" x="680" y="212">• Talk-back to the door</text>
+  <text class="s" x="870" y="233">registers on the local Flexisip — no cloud TLS cert</text>
+  <line x1="680" y1="248" x2="1060" y2="248" stroke="#2d3a48" stroke-width="1"/>
+  <text class="t" x="870" y="270">Adds on top of the app</text>
+  <text class="l" x="680" y="294">• RTSP server + go2rtc (WebRTC to HA)</text>
+  <text class="l" x="680" y="316">• JPEG snapshot on demand</text>
+  <text class="l" x="680" y="338">• Access classifier (keypad / key / unknown)</text>
+  <text class="l" x="680" y="360">• HomeKit (doorbell, lock, camera)</text>
+  <text class="l" x="680" y="382">• MQTT auto-discovery (~50 entities), web UI</text>
+  <text class="l" x="680" y="404">• Cloud-survival switch (blocks OTA, reversible)</text>
+  <text class="s" x="870" y="426">no tones / volume / DND / scenes — the app has none either</text>
+
+  <!-- ===== cloud leftovers ===== -->
+  <rect class="warn" x="40" y="460" width="1040" height="86" rx="8"/>
+  <text class="h" x="560" y="484">Still needs the cloud</text>
+  <text class="l" x="60" y="508">1. One-time provisioning / re-association after a factory reset:</text>
+  <text class="code" x="520" y="508">/eliot/user, /plants, /sip/user, /users/cert/signcert, GWASSOC :9001</text>
+  <text class="l" x="60" y="530">2. Doorbell push when away → use Home Assistant notifications.</text>
+  <text class="l" x="580" y="530">3. Remote access → use Home Assistant (Nabu Casa / VPN).</text>
+</svg>

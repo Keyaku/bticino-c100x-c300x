@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 320" width="1080" height="320" role="img" aria-labelledby="t d">
+  <title id="t">Firmware builder pipeline</title>
+  <desc id="d">Open the fwz with the model-name password, gunzip the ext4 rootfs, edit it without mounting to inject the bridge, init, patches and config, gzip it again, and repack the fwz. The device is never touched.</desc>
+  <style>
+    .bg{fill:#0f1720}
+    .box{fill:#1b2a3a;stroke:#4aa3ff;stroke-width:2}
+    .accent{fill:#132235;stroke:#3fb950;stroke-width:2}
+    .t{fill:#e6edf3;font-family:sans-serif;font-size:15px;text-anchor:middle}
+    .s{fill:#8b98a5;font-family:sans-serif;font-size:12px;text-anchor:middle}
+    .code{fill:#9fe0b0;font-family:monospace;font-size:12px;text-anchor:middle}
+    .ln{stroke:#8b98a5;stroke-width:2;fill:none;marker-end:url(#a)}
+    .cap{fill:#cdd7e0;font-family:sans-serif;font-size:13px;text-anchor:middle}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b98a5"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1080" height="320"/>
+  <text class="cap" x="540" y="34">Offline, mount-free edit of the rootfs — no device involved</text>
+
+  <rect class="box" x="24"  y="120" width="150" height="80" rx="8"/>
+  <text class="t" x="99" y="150">Open .fwz</text>
+  <text class="code" x="99" y="172">zip pwd = model</text>
+
+  <rect class="box" x="214" y="120" width="150" height="80" rx="8"/>
+  <text class="t" x="289" y="150">gunzip</text>
+  <text class="s" x="289" y="172">ext4 rootfs</text>
+
+  <rect class="accent" x="404" y="110" width="200" height="100" rx="8"/>
+  <text class="t" x="504" y="140">Edit ext4</text>
+  <text class="t" x="504" y="160">without mounting</text>
+  <text class="s" x="504" y="182">inject bridge / init /</text>
+  <text class="s" x="504" y="198">patches / your config</text>
+
+  <rect class="box" x="644" y="120" width="150" height="80" rx="8"/>
+  <text class="t" x="719" y="150">gzip</text>
+  <text class="s" x="719" y="172">repacked ext4</text>
+
+  <rect class="box" x="834" y="120" width="220" height="80" rx="8"/>
+  <text class="t" x="944" y="150">Repack .fwz</text>
+  <text class="s" x="944" y="172">personal rooted image</text>
+
+  <path class="ln" d="M174,160 L212,160"/>
+  <path class="ln" d="M364,160 L402,160"/>
+  <path class="ln" d="M604,160 L642,160"/>
+  <path class="ln" d="M794,160 L832,160"/>
+
+  <text class="s" x="504" y="248">image carries your HA token — keep it private</text>
+</svg>

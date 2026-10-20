@@ -13,6 +13,12 @@ I doubt many people have this kind of equipment, let alone willing to modify it,
 * [Donate to fquinto via PayPal](https://www.paypal.com/donate/?business=XQQJHGVPHLD7W&no_recurring=0&item_name=Thank+you+for+collaborating+and+helping+the+development+of+software+improvements.&currency_code=EUR)
 * [Telegram channel](https://t.me/bTicinoClasse300x) from which all of this originated
 
+## Relation to upstream
+
+Upstream has since moved the original patcher to `legacy/` and is building a new flow (an on-the-fly image builder plus a Go USB flasher, no MyHOME Suite), currently targeting the Classe 300X only, with the 100X on its roadmap. This fork keeps the Python patcher as its main tool, since it is the path that has been used to build and flash a Classe 100X, so upstream's `legacy/` copies are not duplicated here.
+
+Upstream's newer material is merged in and worth reading before flashing: [`THREAT_MODEL.md`](THREAT_MODEL.md), [`CLEANROOM.md`](CLEANROOM.md), [`SECURITY.md`](SECURITY.md), [known-good firmware hashes](hashes/README.md), [bring your own firmware](docs/bring-your-own-firmware.md), and the [docs index](docs/README.md).
+
 ## Firmware preparation and flashing
 
 ### Choose your integration level

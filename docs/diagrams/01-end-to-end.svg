@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 300" width="1160" height="300" role="img" aria-labelledby="t d">
+  <title id="t">End-to-end flow</title>
+  <desc id="d">Your firmware to verify by hash to build a rooted image baking in the bridge and config to flash over USB to first boot to Home Assistant.</desc>
+  <style>
+    .bg{fill:#0f1720}
+    .box{fill:#1b2a3a;stroke:#4aa3ff;stroke-width:2}
+    .accent{fill:#132235;stroke:#3fb950;stroke-width:2}
+    .t{fill:#e6edf3;font-family:sans-serif;font-size:16px;text-anchor:middle}
+    .s{fill:#8b98a5;font-family:sans-serif;font-size:12px;text-anchor:middle}
+    .ln{stroke:#8b98a5;stroke-width:2;fill:none;marker-end:url(#a)}
+    .cap{fill:#cdd7e0;font-family:sans-serif;font-size:13px;text-anchor:middle}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b98a5"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1160" height="300"/>
+  <text class="cap" x="580" y="34">Build locally, flash once, ready for Home Assistant on first boot</text>
+
+  <g>
+    <rect class="box" x="20"  y="110" width="160" height="80" rx="8"/>
+    <text class="t" x="100" y="145">Your firmware</text>
+    <text class="s" x="100" y="167">official .fwz</text>
+
+    <rect class="box" x="212" y="110" width="160" height="80" rx="8"/>
+    <text class="t" x="292" y="145">Verify</text>
+    <text class="s" x="292" y="167">SHA-256 match</text>
+
+    <rect class="accent" x="404" y="110" width="160" height="80" rx="8"/>
+    <text class="t" x="484" y="140">Build rooted</text>
+    <text class="t" x="484" y="160">image</text>
+    <text class="s" x="484" y="180">bake bridge + config</text>
+
+    <rect class="box" x="596" y="110" width="160" height="80" rx="8"/>
+    <text class="t" x="676" y="145">Flash over USB</text>
+    <text class="s" x="676" y="167">no MyHOME Suite</text>
+
+    <rect class="box" x="788" y="110" width="160" height="80" rx="8"/>
+    <text class="t" x="868" y="145">First boot</text>
+    <text class="s" x="868" y="167">bridge auto-starts</text>
+
+    <rect class="accent" x="980" y="110" width="160" height="80" rx="8"/>
+    <text class="t" x="1060" y="145">Home Assistant</text>
+    <text class="s" x="1060" y="167">MQTT / HomeKit / RTSP</text>
+  </g>
+
+  <path class="ln" d="M180,150 L210,150"/>
+  <path class="ln" d="M372,150 L402,150"/>
+  <path class="ln" d="M564,150 L594,150"/>
+  <path class="ln" d="M756,150 L786,150"/>
+  <path class="ln" d="M948,150 L978,150"/>
+
+  <text class="s" x="100" y="230">you supply it</text>
+  <text class="s" x="484" y="230">offline, on the fly</text>
+  <text class="s" x="868" y="230">nothing to configure</text>
+</svg>

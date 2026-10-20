@@ -14,6 +14,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"bticino_bridge/pkg/access"
 	"bticino_bridge/pkg/config"
 	"bticino_bridge/pkg/events"
 	"bticino_bridge/pkg/homekit"
@@ -100,6 +101,16 @@ func (s *SimpleMQTTBridge) SendOpenWebNetCommand(command string) error {
 	return err
 }
 
+// ownAdapter adapta *openwebnet.Client (SendCommand devuelve (*Command, error))
+// a la interfaz sip.OWNSender (SendOpenWebNetCommand devuelve solo error) que
+// necesita AudioCall para armar el audio bidireccional (WHO=8) antes del talk-back.
+type ownAdapter struct{ client *openwebnet.Client }
+
+func (a *ownAdapter) SendOpenWebNetCommand(cmd string) error {
+	_, err := a.client.SendCommand(cmd)
+	return err
+}
+
 func main() {
 	// Parse command line flags
 	var (
@@ -112,6 +123,7 @@ func main() {
 		enableWeb        = flag.Bool("enable-web", true, "Enable web interface")
 		enableHomeKit    = flag.Bool("enable-homekit", true, "Enable HomeKit bridge")
 		enableVideo      = flag.Bool("enable-video", true, "Enable video/SIP system")
+		enableAnswerer   = flag.Bool("enable-answerer", true, "Enable SIP answerer (contestador)")
 	)
 	flag.Parse()
 
@@ -172,6 +184,7 @@ func main() {
 	cfg.Web.Enabled = cfg.Web.Enabled && *enableWeb
 	cfg.HomeKit.Enabled = cfg.HomeKit.Enabled && *enableHomeKit
 	cfg.SIP.Enabled = cfg.SIP.Enabled && *enableVideo
+	cfg.SIP.Answerer.Enabled = cfg.SIP.Answerer.Enabled && cfg.SIP.Enabled && *enableAnswerer
 
 	logger.Infof("Configuration loaded: device=%s", cfg.OpenWebNet.Host)
 
@@ -182,6 +195,15 @@ func main() {
 	// Create central EventBus for all components
 	eventBus := events.NewEventBus(10, logger)
 	logger.Info("✅ Central EventBus created for component communication")
+
+	// Clasificador de accesos (portal → telefonillo/llave). Suscriptor puro del
+	// EventBus; no toca el bus OWN. Se gobierna con access.enabled del config.
+	if cfg.Access.Enabled {
+		accessClassifier := access.NewClassifier(cfg.Access, eventBus, logger)
+		accessClassifier.Start()
+		defer accessClassifier.Stop()
+		logger.Info("Clasificador de accesos activado")
+	}
 
 	// Component variables
 	var owClient *openwebnet.Client
@@ -413,12 +435,12 @@ func main() {
 
 		username := cfg.SIP.Username
 		if username == "" {
-			username = "fquinto-gmx.com-1385B784-8A3B-4BF8-9037-A5FB2208B69A"
+			username = "YOUR_SIP_USERNAME"
 		}
 
 		password := cfg.SIP.Password
 		if password == "" {
-			password = "REDACTED_HA1"
+			password = "YOUR_SIP_HA1"
 		}
 
 		devAddr := cfg.SIP.DevAddr
@@ -477,6 +499,26 @@ func main() {
 				webServer.SetCallController(sipClient)
 				logger.Info("   Call control: GET /api/call, POST /api/controls/call/hangup")
 			}
+
+			// Talk-back v2: el bridge posee una llamada de audio local a c300x
+			// (INVITE con SDP de audio real → 200 OK → WAV en SRTP al altavoz).
+			if webServer != nil && owClient != nil {
+				audioSender := sip.NewAudioSender("/usr/local/bin/ffmpeg", logger)
+				audioReceiver := sip.NewAudioReceiver("/usr/local/bin/ffmpeg", logger)
+				audioPort := sip.DefaultGStreamerConfig().VideoPort + 100 // puerto local libre para el leg de audio, sin colisionar con relay/RTSP
+				audioCall := sip.NewAudioCall(sipClient, &ownAdapter{client: owClient}, audioSender, audioReceiver, "127.0.0.1", audioPort, logger)
+				webServer.SetAudioCall(audioCall)
+				logger.Infof("   Talk-back v2: POST /api/talkback/say (audio local port=%d)", audioPort)
+
+				// Audio full-duplex de validación local (sdd 2026-08-21-duplex-door-audio):
+				// solo se inyecta el controlador si el flag está activo en config
+				// (fail-closed — sin el flag, los handlers /api/audio/duplex/* siguen
+				// devolviendo 404 porque ws.duplexController nunca se asigna).
+				if cfg.Audio.DuplexEnabled {
+					webServer.SetDuplexController(audioCall)
+					logger.Info("   Audio full-duplex activado")
+				}
+			}
 		}
 
 		// Create Enhanced RTSP server - can work without SIP (for go2rtc integration)
@@ -495,6 +537,135 @@ func main() {
 		// snapshots) desactivada por defecto. Con false el servidor RTSP escucha
 		// pero nunca dispara comandos hacia el firmware nativo.
 		rtspServer.SetVideoActivation(cfg.Streaming.VideoOnDemand)
+
+		// Vídeo en vivo durante una llamada entrante a nuestra unidad, por espejo
+		// PASIVO (tap AF_PACKET del leg de vídeo nativo en lo:5007 → relay 10002).
+		// CERO comandos al bus (Fase 0 2026-08-18: un *7*300 propio en llamada
+		// real se ignora). Independiente de video_on_demand.
+		// `sip.call.incoming` es específico de nuestro c300x (lo publica el cliente
+		// SIP al recibir un INVITE dirigido a nosotros), no actividad de otros pisos.
+		if cfg.Streaming.LiveOnCall {
+			tap := sip.NewLoopbackRTPTap(sip.NativeVideoRTPPort,
+				sip.DefaultGStreamerConfig().VideoPort, logger)
+			liveVideo := sip.NewLiveVideoOnCall(tap, rtspServer, logger)
+			// Guard: el fin de llamada se detecta por tramas OWN (heurístico);
+			// si se pierde, desarmar solo (el tap es pasivo, pero callActive
+			// inhibiría el self-INVITE indefinidamente).
+			liveVideo.SetGuardTimeout(5 * time.Minute)
+
+			// Armado principal: doorbell.pressed viene del monitor OWN (fiable
+			// en producción). Los sip.call.* se mantienen por si el cliente SIP
+			// llega a registrarse (en producción el REGISTER local suele fallar
+			// y esos eventos no se emiten). Start/Stop son idempotentes.
+			eventBus.Subscribe("doorbell.pressed", func(_ *events.Event) {
+				liveVideo.Start("doorbell.pressed")
+			})
+			// Auto-activación de cámara/micro de la app: no genera INVITE SIP,
+			// solo canal-up nativo en el bus OWN (ver 2026-08-22-media-arm-on-channel-up).
+			eventBus.Subscribe("media.channel.up", func(_ *events.Event) {
+				liveVideo.Start("media.channel.up")
+			})
+			eventBus.Subscribe("call.hangup", func(_ *events.Event) {
+				liveVideo.Stop()
+			})
+			eventBus.Subscribe("sip.call.incoming", func(_ *events.Event) {
+				liveVideo.Start("sip.call.incoming")
+			})
+			eventBus.Subscribe("sip.call.connected", func(_ *events.Event) {
+				liveVideo.Start("sip.call.connected")
+			})
+			eventBus.Subscribe("sip.call.ended", func(_ *events.Event) {
+				liveVideo.Stop()
+			})
+			logger.Info("   Live video on call: habilitado (espejo pasivo lo:5007, cero comandos)")
+		}
+
+		// Audio en vivo de la puerta durante una llamada entrante, por espejo
+		// PASIVO del leg de audio nativo (lo:5000, Speex ya casado con el códec
+		// del relay) hacia el relay de audio del RTSP (10000). Espejo exacto de
+		// liveVideo pero SIN CallActiveMarker: el audio no dispara self-INVITE,
+		// es puramente pasivo. CERO comandos al bus. Fail-closed: nuevo, off por
+		// defecto salvo que se active explícitamente (sdd 2026-08-21-b1-audio-to-ha).
+		if cfg.Streaming.LiveAudioOnCall {
+			audioTap := sip.NewLoopbackRTPTap(sip.NativeAudioRTPPort,
+				sip.DefaultGStreamerConfig().AudioPort, logger)
+			liveAudio := sip.NewLiveAudioOnCall(audioTap, logger)
+			// Guard: mismo criterio que liveVideo — desarme automático si se
+			// pierde el fin de llamada (heurístico OWN).
+			liveAudio.SetGuardTimeout(5 * time.Minute)
+
+			// Mismo armado que liveVideo: doorbell.pressed es el disparador
+			// fiable en producción (monitor OWN); los sip.call.* se mantienen
+			// por si el cliente SIP llega a registrarse. Start/Stop idempotentes.
+			eventBus.Subscribe("doorbell.pressed", func(_ *events.Event) {
+				liveAudio.Start("doorbell.pressed")
+			})
+			// Auto-activación de cámara/micro de la app: no genera INVITE SIP,
+			// solo canal-up nativo en el bus OWN (ver 2026-08-22-media-arm-on-channel-up).
+			eventBus.Subscribe("media.channel.up", func(_ *events.Event) {
+				liveAudio.Start("media.channel.up")
+			})
+			eventBus.Subscribe("call.hangup", func(_ *events.Event) {
+				liveAudio.Stop()
+			})
+			eventBus.Subscribe("sip.call.incoming", func(_ *events.Event) {
+				liveAudio.Start("sip.call.incoming")
+			})
+			eventBus.Subscribe("sip.call.connected", func(_ *events.Event) {
+				liveAudio.Start("sip.call.connected")
+			})
+			eventBus.Subscribe("sip.call.ended", func(_ *events.Event) {
+				liveAudio.Stop()
+			})
+			logger.Info("   Live audio on call: habilitado (espejo pasivo lo:5000 → relay 10000)")
+		}
+
+		// Audio-listen en llamada: mismo patrón que el vídeo, espejo PASIVO
+		// del leg de audio de bajada nativo (lo:5000, RTP Speex en claro —
+		// ver NativeAudioRTPPort) decodificado a WAV en local. CERO comandos
+		// al bus. Gateado por audio.listen_tap_enabled (fail-closed): sin el
+		// flag, nada de esto se cablea (sdd 2026-08-21-audio-tap-5000).
+		if cfg.Audio.ListenTapEnabled {
+			const audioListenRelayPort = 11000 // dedicado, no colisiona con el relay de vídeo (10000/10002)
+			const nativeAudioPayloadType = 110 // PT Speex del leg nativo (ver AudioProbe)
+			tap := sip.NewLoopbackRTPTap(sip.NativeAudioRTPPort, audioListenRelayPort, logger)
+			decoder := sip.NewAudioTapDecoder("/usr/local/bin/ffmpeg", logger)
+			audioListen := sip.NewAudioListenOnCall(tap, decoder, audioListenRelayPort, nativeAudioPayloadType, cfg.Audio.ListenSinkPath, logger)
+			// Guard: igual que liveVideo — si el fin de llamada se pierde
+			// (heurístico OWN), el desarme automático evita que el tap/decoder
+			// queden armados indefinidamente.
+			audioListen.SetGuardTimeout(5 * time.Minute)
+
+			// Mismo armado que liveVideo: doorbell.pressed es el disparador
+			// fiable en producción (monitor OWN); los sip.call.* se mantienen
+			// por si el cliente SIP llega a registrarse. Start/Stop idempotentes.
+			eventBus.Subscribe("doorbell.pressed", func(_ *events.Event) {
+				audioListen.Start("doorbell.pressed")
+			})
+			// Auto-activación de cámara/micro de la app: no genera INVITE SIP,
+			// solo canal-up nativo en el bus OWN (ver 2026-08-22-media-arm-on-channel-up).
+			eventBus.Subscribe("media.channel.up", func(_ *events.Event) {
+				audioListen.Start("media.channel.up")
+			})
+			eventBus.Subscribe("call.hangup", func(_ *events.Event) {
+				audioListen.Stop()
+			})
+			eventBus.Subscribe("sip.call.incoming", func(_ *events.Event) {
+				audioListen.Start("sip.call.incoming")
+			})
+			eventBus.Subscribe("sip.call.connected", func(_ *events.Event) {
+				audioListen.Start("sip.call.connected")
+			})
+			eventBus.Subscribe("sip.call.ended", func(_ *events.Event) {
+				audioListen.Stop()
+			})
+
+			if webServer != nil {
+				webServer.SetAudioListenController(audioListen)
+				logger.Infof("   Audio-listen: POST/GET /api/audio/listen/{start,stop,status} (relay 127.0.0.1:%d)", audioListenRelayPort)
+			}
+			logger.Info("   Audio-listen (tap 5000) activado")
+		}
 
 		// Sonda de vídeo cooperativa (diagnóstico): un único *7*300, sin retry ni
 		// self-INVITE. Endpoint gateado por POST + ?confirm=yes. Solo se cablea si
@@ -586,6 +757,77 @@ func main() {
 		}
 	} else {
 		logger.Info("Video/SIP system disabled in configuration")
+	}
+
+	// ==================== COMPONENT 4b: SIP Answerer (contestador, F1) ====================
+	// Fuera del `if cfg.SIP.Enabled { ... }` para que compile igual con SIP off;
+	// el gate de más arriba ya garantiza Answerer.Enabled ⟹ SIP.Enabled.
+	var answerer *sip.Answerer
+	var talkSender *sip.TalkSender
+	if cfg.SIP.Answerer.Enabled {
+		// Route-check read-only (no bloquea el arranque; solo informa).
+		if ok, err := sip.CheckAnswererRoute(cfg.SIP.Answerer.RouteFile, cfg.SIP.Answerer.User, cfg.SIP.Domain); err != nil {
+			logger.Warnf("[ANSWERER] route-check no disponible (%v); ¿ejecutaste setup_answerer_route.sh?", err)
+		} else if !ok {
+			logger.Warnf("[ANSWERER] el AOR %s@%s NO está en route_ext.conf: no llegará el fork hasta darlo de alta", cfg.SIP.Answerer.User, cfg.SIP.Domain)
+		}
+		serverAddr := fmt.Sprintf("%s:%d", cfg.SIP.ServerHost, cfg.SIP.ServerPort) // 127.0.0.1:5060
+		tr, err := sip.NewTCPTransport(serverAddr, logger)
+		if err != nil {
+			logger.Errorf("[ANSWERER] no se pudo conectar al Flexisip local (%s): %v — contestador deshabilitado", serverAddr, err)
+		} else {
+			answerer = sip.NewAnswerer(cfg.SIP.Answerer, cfg.SIP.Domain, tr, eventBus, logger)
+			if err := answerer.Start(); err != nil {
+				logger.Errorf("[ANSWERER] Start falló: %v", err)
+				answerer = nil
+			} else {
+				if webServer != nil {
+					webServer.SetAnswerer(answerer)
+				} else {
+					logger.Warn("[ANSWERER] web dashboard deshabilitado: sin API REST para contestar/colgar desde HA")
+				}
+				logger.Info("[ANSWERER] contestador SIP activo (bajo demanda desde HA)")
+
+				// F2: talk-back desde HA (fail-closed por talk_enabled).
+				if cfg.SIP.Answerer.TalkEnabled {
+					ffmpegPath := "/usr/local/bin/ffmpeg" // ffmpeg estático del device (mismo binario que audio_sender/receiver/tap)
+					talkSender = sip.NewTalkSender(cfg.SIP.Answerer, sip.NewExecRunner(), eventBus, logger,
+						ffmpegPath, "127.0.0.1", 40004, 97)
+					if err := talkSender.Start(); err != nil {
+						logger.Errorf("[TALK] Start falló: %v", err)
+						talkSender = nil
+					} else {
+						logger.Info("[TALK] talk-back activo (hablar desde HA durante la llamada)")
+					}
+				}
+			}
+		}
+	}
+
+	// ==================== COMPONENT 4c: PanelView ('Ver placa') ====================
+	// Fail-closed: requiere streaming.panelview.enabled + DEVADDR, y SIP, OWN y RTSP vivos
+	// (punteros nil dentro de una interfaz no serían nil: se evalúan aquí).
+	if cfg.Streaming.PanelView.Enabled && cfg.Streaming.PanelView.DEVADDR != "" &&
+		sipClient != nil && owClient != nil && rtspServer != nil {
+		eyeReceiver := sip.NewAudioReceiver("/usr/local/bin/ffmpeg", logger) // modo forward (CaptureForward)
+		eyeAudioPort := sip.DefaultGStreamerConfig().VideoPort + 102         // 10104: distinto del 10102 del AudioCall
+		eyeVideoPort := sip.DefaultGStreamerConfig().VideoPort + 104         // 10106: vídeo del offer (no se consume)
+		panelView := sip.NewPanelView(
+			cfg.Streaming.PanelView,
+			sipClient,
+			eyeReceiver,
+			&ownAdapter{client: owClient},
+			rtspServer, // CallActiveChecker
+			eventBus,
+			"127.0.0.1",
+			eyeAudioPort, eyeVideoPort,
+			logger,
+		)
+		if err := panelView.Start(); err != nil {
+			logger.WithError(err).Warn("panelview: no se pudo iniciar; deshabilitado")
+		} else {
+			logger.Info("panelview: 'Ver placa' activo")
+		}
 	}
 
 	// ==================== COMPONENT 5: MQTT Bridge ====================
@@ -804,6 +1046,28 @@ func main() {
 				if mqttBridge != nil {
 					mqttBridge.PublishDoorbellEvent("openwebnet_bus", cmd.Raw)
 				}
+			}
+
+			// Detectar fin de llamada (colgar) en el bus: desarma el vídeo en
+			// vivo (live_on_call). Cubre llamada entrante y auto-llamada.
+			if cmd.Raw == bticino.CmdHangupIncoming || cmd.Raw == bticino.CmdHangupSelf || cmd.Raw == bticino.CmdHangupSelf420 {
+				eventBus.PublishWithSource("call.hangup", map[string]interface{}{
+					"raw": cmd.Raw,
+				}, "openwebnet_monitor")
+			}
+
+			// Detectar subida de canal de media nativo (audio 5000 / vídeo 5007).
+			// Es el disparador FIABLE del armado de las pistas de media en la
+			// auto-activación de la app (que NO genera INVITE SIP; ver spec
+			// 2026-08-22-media-arm-on-channel-up). Solo REACCIONA a lo que el
+			// device anuncia en su bus — no se envía ningún *7*300 (Fase 0).
+			if bticino.IsMediaChannelUp(cmd.Raw) {
+				eventBus.PublishWithSource("media.channel.up", map[string]interface{}{
+					"raw":   cmd.Raw,
+					"who":   cmd.WHO,
+					"what":  cmd.WHAT,
+					"where": cmd.WHERE,
+				}, "openwebnet_monitor")
 			}
 
 			// Detectar cambios de estado del timbre en tiempo real (eventos del bus)
@@ -1177,6 +1441,25 @@ func main() {
 			logger.WithError(err).Error("Error stopping video manager")
 		} else {
 			logger.Info("✅ Video manager stopped")
+		}
+	}
+
+	// Stop talk-back (F2) antes que el contestador, para no dejar un ffmpeg
+	// huérfano si el answerer cae primero.
+	if talkSender != nil {
+		logger.Info("Stopping talk-back sender...")
+		talkSender.Stop()
+		logger.Info("✅ Talk-back sender stopped")
+	}
+
+	// Stop SIP answerer (antes que el cliente SIP, para que nuestra pata mande
+	// BYE primero si hay una llamada del contestador en curso).
+	if answerer != nil {
+		logger.Info("Stopping SIP answerer...")
+		if err := answerer.Stop(); err != nil {
+			logger.WithError(err).Error("Error stopping SIP answerer")
+		} else {
+			logger.Info("✅ SIP answerer stopped")
 		}
 	}
 

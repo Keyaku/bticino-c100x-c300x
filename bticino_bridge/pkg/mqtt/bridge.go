@@ -7,9 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -18,6 +16,7 @@ import (
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/sirupsen/logrus"
 
+	"bticino_bridge/pkg/access"
 	"bticino_bridge/pkg/bticino"
 	"bticino_bridge/pkg/bticino_commands"
 	"bticino_bridge/pkg/config"
@@ -25,6 +24,7 @@ import (
 	"bticino_bridge/pkg/events"
 	"bticino_bridge/pkg/messageparser"
 	"bticino_bridge/pkg/openwebnet"
+	"bticino_bridge/pkg/system"
 	"bticino_bridge/pkg/version"
 )
 
@@ -444,6 +444,71 @@ func (b *MQTTBridge) publishHomeAssistantDiscovery() {
 		"icon":          "mdi:door-open",
 		"device":        device,
 		"availability":  avail,
+	})
+	entityCount++
+
+	// --- 7b. Button: Contestar (contestador SIP F1) ---
+	b.discovery("button", "bticino_contestar", map[string]interface{}{
+		"name":          "Contestar",
+		"unique_id":     "bticino_c300x_answer",
+		"object_id":     "bticino_contestar",
+		"command_topic": dp + "/answerer/answer",
+		"payload_press": "PRESS",
+		"icon":          "mdi:phone-in-talk",
+		"device":        device,
+		"availability":  avail,
+	})
+	entityCount++
+
+	// --- 7c. Button: Colgar (contestador SIP F1) ---
+	b.discovery("button", "bticino_colgar", map[string]interface{}{
+		"name":          "Colgar",
+		"unique_id":     "bticino_c300x_hangup",
+		"object_id":     "bticino_colgar",
+		"command_topic": dp + "/answerer/hangup",
+		"payload_press": "PRESS",
+		"icon":          "mdi:phone-hangup",
+		"device":        device,
+		"availability":  avail,
+	})
+	entityCount++
+
+	// --- 7d. Sensor: Contestador (estado del contestador SIP F1) ---
+	b.discovery("sensor", "bticino_contestador", map[string]interface{}{
+		"name":        "Contestador",
+		"unique_id":   "bticino_c300x_answerer",
+		"object_id":   "bticino_contestador",
+		"state_topic": dp + "/answerer/state",
+		// Atributos: call_type de la última llamada entrante (placa / intercom / desconocido).
+		"json_attributes_topic": dp + "/answerer/attributes",
+		"icon":                  "mdi:phone-voip",
+		"device":                device,
+		"availability":          avail,
+	})
+	entityCount++
+
+	// --- 7e. Button: Ver placa (PanelView, modo ojo sin llamada) ---
+	b.discovery("button", "bticino_ver_placa", map[string]interface{}{
+		"name":          "Ver placa",
+		"unique_id":     "bticino_c300x_panelview",
+		"object_id":     "bticino_ver_placa",
+		"command_topic": dp + "/panelview/show",
+		"payload_press": "PRESS",
+		"icon":          "mdi:eye",
+		"device":        device,
+		"availability":  avail,
+	})
+	entityCount++
+
+	// --- 7f. Sensor: Placa en vista (estado de PanelView) ---
+	b.discovery("sensor", "bticino_placa_en_vista", map[string]interface{}{
+		"name":         "Placa en vista",
+		"unique_id":    "bticino_c300x_panelview_state",
+		"object_id":    "bticino_placa_en_vista",
+		"state_topic":  dp + "/panelview/state",
+		"icon":         "mdi:door",
+		"device":       device,
+		"availability": avail,
 	})
 	entityCount++
 
@@ -1019,6 +1084,32 @@ func (b *MQTTBridge) publishHomeAssistantDiscovery() {
 		entityCount++
 	}
 
+	// --- Acceso portal: entidad event (para automatizaciones) ---
+	b.discovery("event", "bticino_access", map[string]interface{}{
+		"name":         "Acceso portal",
+		"unique_id":    "bticino_c300x_access_event",
+		"object_id":    "bticino_acceso_portal",
+		"state_topic":  dp + "/access/event",
+		"event_types":  []string{"telefonillo", "llave", "desconocido"},
+		"icon":         "mdi:door-open",
+		"device":       device,
+		"availability": avail,
+	})
+	entityCount++
+
+	// --- Último acceso: sensor con atributos ricos ---
+	b.discovery("sensor", "bticino_last_access", map[string]interface{}{
+		"name":                  "Último acceso",
+		"unique_id":             "bticino_c300x_last_access",
+		"object_id":             "bticino_ultimo_acceso",
+		"state_topic":           dp + "/access/last",
+		"json_attributes_topic": dp + "/access/last/attributes",
+		"icon":                  "mdi:account-key",
+		"device":                device,
+		"availability":          avail,
+	})
+	entityCount++
+
 	b.logger.Infof("MQTT: Published %d Home Assistant discovery entities (total with device config)", entityCount)
 }
 
@@ -1062,6 +1153,40 @@ func localOutboundIP() string {
 	return ""
 }
 
+// accessEventPayload arma el payload JSON de la entidad HA `event` a partir de
+// un AccessEvent (HA exige el campo event_type dentro del state_topic).
+func accessEventPayload(ev access.AccessEvent) string {
+	b, err := json.Marshal(map[string]interface{}{
+		"event_type":  ev.Type,
+		"confidence":  ev.Confidence,
+		"had_call":    ev.HadCall,
+		"ring_source": ev.RingSource,
+		"duration_s":  ev.DurationS,
+		"where":       ev.Where,
+	})
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+// answererIncomingAttrs arma los atributos JSON del sensor "Contestador" a partir del payload
+// de doorcall.incoming: el tipo de la llamada (placa / intercom / desconocido). Sin tipo en el
+// evento => "desconocido", nunca vacío.
+func answererIncomingAttrs(data interface{}) string {
+	callType := "desconocido"
+	if m, ok := data.(map[string]interface{}); ok {
+		if ct, ok := m["call_type"].(string); ok && ct != "" {
+			callType = ct
+		}
+	}
+	b, err := json.Marshal(map[string]interface{}{"call_type": callType})
+	if err != nil {
+		return `{"call_type":"desconocido"}`
+	}
+	return string(b)
+}
+
 // discovery publishes one HA MQTT discovery config message
 func (b *MQTTBridge) discovery(component, objectID string, cfg map[string]interface{}) {
 	// Asignar entity_category automáticamente si no se especificó una.
@@ -1096,6 +1221,9 @@ func (b *MQTTBridge) subscribeToCommands() {
 
 	sub(dp+"/lock/set", b.handleDoorCommand)
 	sub(dp+"/door/open", b.handleDoorOpenButton)
+	sub(dp+"/answerer/answer", b.handleAnswererAnswer)
+	sub(dp+"/answerer/hangup", b.handleAnswererHangup)
+	sub(dp+"/panelview/show", b.handlePanelViewShow)
 	sub(dp+"/voicemail/set", b.handleVoicemailCommand)
 	sub(dp+"/doorbellsound/set", b.handleDoorbellSoundCommand)
 	sub(dp+"/display/set", b.handleDisplayCommand)
@@ -1138,6 +1266,37 @@ func (b *MQTTBridge) handleDoorOpenButton(client pahomqtt.Client, msg pahomqtt.M
 	b.logger.Info("MQTT: Door open button pressed")
 	b.incCommands()
 	b.executeDoorUnlock()
+}
+
+// handleAnswererAnswer publica en el bus la petición de contestar la llamada
+// entrante; el Answerer (pkg/sip, F1) está suscrito a doorcall.answer.request.
+// Acoplamiento suelto: el bridge MQTT no guarda referencia al Answerer.
+func (b *MQTTBridge) handleAnswererAnswer(client pahomqtt.Client, msg pahomqtt.Message) {
+	b.logger.Info("MQTT: botón Contestar")
+	b.incCommands()
+	if b.eventBus != nil {
+		b.eventBus.PublishWithSource("doorcall.answer.request", map[string]interface{}{}, "mqtt")
+	}
+}
+
+// handleAnswererHangup publica en el bus la petición de colgar la llamada
+// activa; el Answerer está suscrito a doorcall.hangup.request.
+func (b *MQTTBridge) handleAnswererHangup(client pahomqtt.Client, msg pahomqtt.Message) {
+	b.logger.Info("MQTT: botón Colgar")
+	b.incCommands()
+	if b.eventBus != nil {
+		b.eventBus.PublishWithSource("doorcall.hangup.request", map[string]interface{}{}, "mqtt")
+	}
+}
+
+// handlePanelViewShow publica en el bus la petición de "ver placa"; el PanelView
+// (pkg/sip) está suscrito a panelview.request.
+func (b *MQTTBridge) handlePanelViewShow(client pahomqtt.Client, msg pahomqtt.Message) {
+	b.logger.Info("MQTT: botón Ver placa")
+	b.incCommands()
+	if b.eventBus != nil {
+		b.eventBus.PublishWithSource("panelview.request", map[string]interface{}{}, "mqtt")
+	}
 }
 
 func (b *MQTTBridge) executeDoorUnlock() {
@@ -1350,25 +1509,7 @@ func (b *MQTTBridge) handleRestartBridgeCommand(client pahomqtt.Client, msg paho
 	}
 	b.logger.Warn("MQTT: reinicio del bridge solicitado")
 	b.incCommands()
-	exe, err := os.Executable()
-	if err != nil {
-		b.logger.WithError(err).Error("restart_bridge: no se pudo determinar el binario")
-		return
-	}
-	dir := filepath.Dir(exe)
-	go func() {
-		// setsid + sleep para que el hijo sobreviva a nuestra salida y arranque
-		// cuando ya hayamos terminado (sin dos instancias a la vez).
-		cmd := exec.Command("setsid", "sh", "-c",
-			fmt.Sprintf("sleep 2; cd '%s' && exec '%s' > /tmp/bridge_deploy.log 2>&1", dir, exe))
-		if err := cmd.Start(); err != nil {
-			b.logger.WithError(err).Error("restart_bridge: no se pudo relanzar")
-			return
-		}
-		b.logger.Warn("restart_bridge: relanzado, saliendo en 500ms")
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
-	}()
+	system.RestartBridgeAsync(b.logger)
 }
 
 // handleRebootDeviceCommand reinicia TODO el videoportero (/sbin/reboot).
@@ -1378,12 +1519,7 @@ func (b *MQTTBridge) handleRebootDeviceCommand(client pahomqtt.Client, msg pahom
 	}
 	b.logger.Warn("MQTT: REINICIO DEL DISPOSITIVO solicitado (/sbin/reboot)")
 	b.incCommands()
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		if err := exec.Command("/sbin/reboot").Run(); err != nil {
-			b.logger.WithError(err).Error("reboot: /sbin/reboot falló")
-		}
-	}()
+	system.RebootDeviceAsync(b.logger)
 }
 
 // publishEvent publica un disparo de entidad Event de HA en <prefix>/event/<sub>.
@@ -1568,6 +1704,57 @@ func (b *MQTTBridge) setupEventSubscriptions() {
 	b.eventBus.Subscribe("sip.call.connected", func(event *events.Event) {
 		b.publish(dp+"/call/state", "CONNECTED", false)
 		b.publishEvent("call", "connected", nil)
+		b.incEvents()
+	})
+
+	// Estado del contestador SIP (F1): reflejar doorcall.* en el sensor
+	// bticino_contestador. Acoplamiento suelto vía EventBus, sin referencia
+	// directa al Answerer.
+	b.eventBus.Subscribe("doorcall.incoming", func(event *events.Event) {
+		// Atributos ANTES del estado: cuando HA vea "ringing", el call_type ya es el de esta llamada.
+		b.publish(dp+"/answerer/attributes", answererIncomingAttrs(event.Data), true)
+		b.publish(dp+"/answerer/state", "ringing", true)
+	})
+	b.eventBus.Subscribe("doorcall.answered", func(event *events.Event) {
+		b.publish(dp+"/answerer/state", "in_call", true)
+	})
+	b.eventBus.Subscribe("doorcall.ended", func(event *events.Event) {
+		b.publish(dp+"/answerer/state", "idle", true)
+	})
+
+	// Estado de PanelView (ver placa): sensor bticino_placa_en_vista.
+	for _, ev := range []string{"panelview.started", "panelview.connected"} {
+		b.eventBus.Subscribe(ev, func(event *events.Event) {
+			b.publish(dp+"/panelview/state", "viewing", true)
+		})
+	}
+	for _, ev := range []string{"panelview.ended", "panelview.rejected"} {
+		b.eventBus.Subscribe(ev, func(event *events.Event) {
+			b.publish(dp+"/panelview/state", "idle", true)
+		})
+	}
+
+	// Acceso clasificado (pkg/access): event entity + sensor "Último acceso".
+	b.eventBus.Subscribe("access.classified", func(event *events.Event) {
+		ev, ok := event.Data.(access.AccessEvent)
+		if !ok {
+			return
+		}
+		// Entidad event: payload con event_type; retain=false (evento discreto).
+		b.publish(dp+"/access/event", accessEventPayload(ev), false)
+		// Sensor: estado = tipo; atributos = detalle. retain=true (estado).
+		b.publish(dp+"/access/last", ev.Type, true)
+		attrs, err := json.Marshal(map[string]interface{}{
+			"confidence":  ev.Confidence,
+			"had_call":    ev.HadCall,
+			"ring_source": ev.RingSource,
+			"duration_s":  ev.DurationS,
+			"where":       ev.Where,
+			"timestamp":   ev.Timestamp.Format(time.RFC3339),
+		})
+		if err == nil {
+			b.publish(dp+"/access/last/attributes", string(attrs), true)
+		}
 		b.incEvents()
 	})
 

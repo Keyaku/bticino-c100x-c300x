@@ -5,6 +5,7 @@ scripts/ha_config/my_login_details.md
 scripts/ha_config/info_wifi.txt
 *.pem
 *.key
+*.crt
 
 # === Python ===
 __pycache__/
@@ -26,3 +27,6 @@ Thumbs.db
 
 # === Various ===
 *.log
+
+# internal execution workspace (ledger/scratch — never public)
+.internal/

@@ -27,21 +27,36 @@ sip:
   local_port: 5060
   server_host: "127.0.0.1"  # Flexisip local
   server_port: 5060
-  transport: "tcp"  # tcp, udp, tls - slyoldfox uses TCP
+  transport: "udp"  # tcp, udp, tls - TCP local al flexisip da timeout; UDP funciona
   domain: "YOUR_GATEWAY_ID.bs.iotleg.com"
   username: "webrtc"          # Per slyoldfox: register as webrtc@domain
-  password: "REDACTED_HA1"  # HA1 = MD5(webrtc:YOUR_GATEWAY_ID.bs.iotleg.com:webrtc)
+  password: "YOUR_SIP_HA1"  # HA1 = MD5(webrtc:YOUR_GATEWAY_ID.bs.iotleg.com:webrtc)
   dev_addr: "20"
   use_ha1: true
   insecure_tls: false
   sip_target: "c300x"         # INVITE target: c300x@domain (the intercom)
+
+  # Contestador SIP bajo demanda desde HA (F1). Fail-closed: enabled=false por
+  # defecto. El deploy NO pushea config.yaml — hay que dar de alta este bloque
+  # a mano en el device (ver docs/answerer-setup.md) tras registrar la ruta con
+  # scripts/setup_answerer_route.sh.
+  answerer:
+    enabled: false          # master switch F1 (poner true en el device tras dar de alta el route)
+    user: "bridge"
+    audio_port: 10100
+    video_port: 10102       # -1 = rechazar m=video (audio-only)
+    max_call_seconds: 120
+    ring_timeout_seconds: 70 # guarda de timbre: sin contestar ni CANCEL, cierra con 480 (default 70, como la app 1.17.3)
+    talk_enabled: false     # F2: hablar desde HA (micro→go2rtc :40004→ffmpeg SRTP→placa); poner true en el device
+    talk_keepalive: false   # subida de audio continua (silencio speex si el micro calla) para que la placa abra el audio de bajada; requiere talk_enabled
+    route_file: "/etc/flexisip/users/route_ext.conf"
 
 # ==================== MQTT ====================
 mqtt:
   enabled: true
   host: "192.168.1.3"
   port: 1883
-  username: "mqtt_user"
+  username: "ha"
   password: "CHANGE_ME"
   client_id: "bticino_bridge"
   topic_prefix: "bticino"
@@ -103,6 +118,14 @@ streaming:
   #                puede fallar con "Internal data stream error" en frío)
   #   auto      -> intenta avmedia y cae a gstreamer si no fluye RTP
   video_backend: "avmedia"
+  # Vídeo en vivo durante una llamada entrante a NUESTRA unidad, por espejo
+  # pasivo (tap del leg de vídeo nativo en lo:5007 hacia el relay). No envía
+  # ningún comando al bus; independiente de video_on_demand.
+  live_on_call: true
+  # Audio en vivo de la puerta durante una llamada: mismo espejo pasivo que
+  # live_on_call pero del leg de audio nativo (tap lo:5000 -> relay 10000 del
+  # RTSP). Sin CallActiveMarker (no dispara self-INVITE) ni comandos al bus.
+  live_audio_on_call: true
 
 # ==================== NETWORK ====================
 network:
@@ -182,7 +205,12 @@ privacy:
 
 # ==================== SEGURIDAD ====================
 security:
-  web_auth_required: false  # Requiere login para web dashboard
+  # Basic Auth para TODO el dashboard y la API (incluye /api/config, que
+  # contiene contraseñas en claro). Activado sin web_password → el servidor
+  # responde 503 (fail-closed). El navegador pedirá login una sola vez.
+  web_auth_required: true
+  web_username: "admin"
+  web_password: "CHANGE_ME"
   web_https_enabled: false  # Habilitar HTTPS
   api_rate_limit: 100       # Requests por minuto
   config_audit_log: true    # Log de cambios de configuración
@@ -194,8 +222,30 @@ additional_locks:
   # - name: "Puerta Lateral"
   #   where: 22
 
+# ==================== CLASIFICADOR DE ACCESOS ====================
+# Clasifica cada apertura del portal como telefonillo/llave correlacionando con
+# timbres/llamadas previos. Solo escucha el bus interno; no envía comandos.
+access:
+  enabled: true
+  correlation_window: 30s      # apertura dentro de este tiempo tras timbre/llamada → "telefonillo"
+  max_hold_wait: 8s            # cuánto esperar al cierre para medir la duración del pulso
+  duration_visitor_max: 3500ms # duración ≤ → rango "visita" (solo ajusta la CONFIANZA, no la etiqueta)
+
 # ==================== UDP PROXY ====================
 udp_proxy:
   enabled: false
   listen_port: 40004
   target_port: 4000
+
+# ==================== AUDIO FULL-DUPLEX ====================
+# Audio full-duplex en la pata propia del bridge (oír + hablar con la puerta).
+# Fail-closed: si se omite el bloque, queda desactivado.
+audio:
+  duplex_enabled: true
+  duplex_sink_path: "/home/bticino/cfg/extra/recordings/door_audio.wav"
+  # Espejo pasivo del audio de bajada nativo (tap lo:5000, sdd
+  # 2026-08-21-audio-tap-5000). Fail-closed: si se omite, queda desactivado.
+  listen_tap_enabled: true
+  # Sink WAV dedicado del oído pasivo (distinto de duplex_sink_path, para no
+  # compartir archivo con la pata duplex).
+  listen_sink_path: "/home/bticino/cfg/extra/recordings/door_audio_listen.wav"
